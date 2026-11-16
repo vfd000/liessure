@@ -64,7 +64,7 @@ DEFAULT_INTERESTS = (
 # "Name:wikipedia-code" pairs.
 DEFAULT_LEARNING = "Telugu:te|Mandarin:zh"
 DEFAULT_CURIOUS = (
-    "French:fr|Korean:ko|Cantonese:yue|Japanese:ja|Russian:ru|Ukrainian:uk"
+    "French:fr|Korean:ko|Cantonese:zh-yue|Japanese:ja|Russian:ru|Ukrainian:uk"
     "|Hindi:hi|Indonesian:id|Tagalog:tl"
 )
 DEFAULT_FLUENT = "Spanish:es"
@@ -156,6 +156,11 @@ class Settings:
     travel: Service = field(default_factory=Service)
     travel_token: str = ""
 
+    # The household graph: the person's interests, languages, projects, home.
+    graph: Service = field(default_factory=Service)
+    graph_token: str = ""
+    graph_person: str = "Axl"
+
     data_dir: str = "/data"
 
     llm_url: str = ""
@@ -219,6 +224,9 @@ class Settings:
             nebula_feeds=parse_list(_env("NEBULA_FEEDS", "https://rss.nebula.app/video.rss")),
             travel=svc("TRAVEL"),
             travel_token=_env("TRAVEL_TOKEN"),
+            graph=svc("GRAPH"),
+            graph_token=_env("GRAPH_TOKEN"),
+            graph_person=_env("GRAPH_PERSON", "Axl"),
             data_dir=_env("DATA_DIR", "/data"),
             llm_url=_strip(_env("LLM_URL")),
             llm_key=_env("LLM_KEY"),

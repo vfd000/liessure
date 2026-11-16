@@ -32,7 +32,7 @@ from urllib.parse import quote
 
 import httpx
 
-from . import context, sources
+from . import context, profile, sources
 from .config import Settings, language_queries
 from .store import Store
 
@@ -585,9 +585,11 @@ async def generate_phrases(client: httpx.AsyncClient, s: Settings, store: Store,
 
 
 async def curate(client: httpx.AsyncClient, s: Settings, store: Store, rng: random.Random | None = None,
-                 only: list[str] | None = None) -> dict[str, dict[str, int]]:
+                 only: list[str] | None = None, profiles: "profile.ProfileCache | None" = None) -> dict[str, dict[str, int]]:
     rng = rng or random.Random()
     store.prune()
+    if profiles is not None:
+        s = await profiles.get(client, force=True)  # each pass judges against the latest profile
     out: dict[str, dict[str, int]] = {}
     for kind in only or enabled_kinds(s):
         try:
@@ -600,14 +602,24 @@ async def curate(client: httpx.AsyncClient, s: Settings, store: Store, rng: rand
             out.setdefault("language", {})["phrases"] = await generate_phrases(client, s, store, rng)
         except Exception as e:  # noqa: BLE001
             log.warning("phrase cards failed: %s: %s", type(e).__name__, e)
+    if profiles is not None and s.graph.url and s.graph_token and not only:
+        week = datetime.now().strftime("%G-W%V")
+        if store.get_meta("interests_proposed_week") != week:
+            try:
+                out["profile"] = {"proposed_interests": await profile.propose_interests(
+                    client, s, store, profiles, ask_llm)}
+                store.set_meta("interests_proposed_week", week)
+            except Exception as e:  # noqa: BLE001
+                log.warning("proposing interests failed: %s: %s", type(e).__name__, e)
     return out
 
 
-async def loop(client: httpx.AsyncClient, s: Settings, store: Store) -> None:
+async def loop(client: httpx.AsyncClient, s: Settings, store: Store,
+               profiles: "profile.ProfileCache | None" = None) -> None:
     await asyncio.sleep(20)  # let the app come up first
     while True:
         try:
-            await curate(client, s, store)
+            await curate(client, s, store, profiles=profiles)
         except Exception as e:  # noqa: BLE001 - a bad run must never kill the loop
             log.warning("curator run failed: %s: %s", type(e).__name__, e)
         # Run on the schedule, or sooner (but not more than every half hour) when a pool runs low.

@@ -54,6 +54,9 @@ jobs:
       LANGUAGES_CURIOUS: ${{ vars.LANGUAGES_CURIOUS }}
       LANGUAGES_FLUENT: ${{ vars.LANGUAGES_FLUENT }}
       TRAVEL_TOKEN: ${{ secrets.TRAVEL_TOKEN }}
+      GRAPH_URL: ${{ vars.GRAPH_URL }}
+      GRAPH_TOKEN: ${{ secrets.GRAPH_TOKEN }}
+      GRAPH_PERSON: ${{ vars.GRAPH_PERSON }}
       LANGUAGE_PRACTICE_URL: ${{ vars.LANGUAGE_PRACTICE_URL }}
     steps:
       - uses: actions/checkout@v4

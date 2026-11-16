@@ -63,6 +63,32 @@ inline Invidious embed. "Open" goes to the real thing.
 Credentials stay server-side. Images from household services go through
 `/img`, which only fetches from the configured service bases.
 
+## Profile (household graph)
+
+Who the feed is for comes from the household graph
+([vfd000/household-graph](https://github.com/vfd000/household-graph)):
+`GET {GRAPH_URL}/api/profile/{GRAPH_PERSON}` with `GRAPH_TOKEN` (the graph's
+bot token; interests are household-visible). It supplies:
+
+- the curator's description of you: loves, likes, curious-abouts, languages,
+  active projects, and an explicit "leave out" list from `avoid` topics;
+- Wikipedia interest searches (love/like subjects and activities, plus the
+  topics of active projects);
+- languages: being learned (by priority), curious (phrase cards), fluent;
+- home coordinates for the "near home" geosearch.
+
+It's refreshed hourly and before every curation pass. If the graph is unset
+or down, the `CURATOR_PROFILE`, `WIKI_INTERESTS`, `LANGUAGES_*` and `HOME_*`
+variables are used instead (`/api/sources` says which: `"profile": "graph"`
+or `"env"`).
+
+Once a week the curator looks at the last two weeks of opens and proposes up
+to three **new interests** to the graph (`POST /api/facts`, kind `interest`,
+source `liessure`), each with the titles that suggested it and its Wikidata
+id. A proposal needs at least two separate opens behind it. Nothing changes
+until you approve it in the graph (`pending_facts` / `decide_fact` through
+Concierge); approved, it becomes part of the profile.
+
 ## Curation (LLM gateway)
 
 With `LLM_URL` and `LLM_KEY` set, a background job runs every
@@ -144,6 +170,8 @@ Not done yet (needs the LXC):
 - [ ] A LiteLLM virtual key scoped to `fast-haiku` only, as secret `LLM_KEY`;
       `LLM_URL=https://llm.liess.tv` (LAN-only, which the LXC is)
 - [ ] A travel API token as secret `TRAVEL_TOKEN`, `TRAVEL_URL=https://travel.liess.tv`
+- [ ] The household graph's bot token as secret `GRAPH_TOKEN`,
+      `GRAPH_URL=https://graph.liess.tv` (after the graph's interests change is deployed)
 - [ ] Check the Seattle Times feed: subscriber links open in the browser or
       app where you're signed in, but the feed itself is public headlines
 

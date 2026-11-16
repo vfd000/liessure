@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel, Field
 
-from . import curator, sources
+from . import curator, profile, sources
 from .config import KINDS, Settings
 from .store import Store
 
@@ -50,6 +50,7 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     store = store or Store(f"{settings.data_dir}/liessure.db")
+    profiles = profile.ProfileCache(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -61,7 +62,7 @@ def create_app(
         )
         task = None
         if run_curator and settings.curator_enabled:
-            task = asyncio.create_task(curator.loop(app.state.client, settings, store))
+            task = asyncio.create_task(curator.loop(app.state.client, settings, store, profiles))
         try:
             yield
         finally:
@@ -72,6 +73,7 @@ def create_app(
     app = FastAPI(title="Liessure", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.settings = settings
     app.state.store = store
+    app.state.profiles = profiles
 
     async def one(client: httpx.AsyncClient, kind: str, rng: random.Random) -> dict | None:
         # Mostly the curated pool; a share of uncurated cards keeps some surprise in it.
@@ -80,7 +82,8 @@ def create_app(
             if pick:
                 return {**pick["card"], "why": pick["reason"]}
         try:
-            card = await asyncio.wait_for(sources.SOURCES[kind](client, settings, rng), PER_CARD_TIMEOUT)
+            s = await profiles.get(client)  # the graph's languages, home and interests, or the env fallback
+            card = await asyncio.wait_for(sources.SOURCES[kind](client, s, rng), PER_CARD_TIMEOUT)
             return card.to_dict()
         except (sources.Unavailable, httpx.HTTPError, asyncio.TimeoutError, KeyError, ValueError, TypeError) as e:
             log.warning("source %s failed: %s: %s", kind, type(e).__name__, e)
@@ -91,10 +94,12 @@ def create_app(
         return {"ok": True}
 
     @app.get("/api/sources")
-    async def list_sources():
+    async def list_sources(request: Request):
         avail = sources.configured(settings)
+        await profiles.get(request.app.state.client)
         return {
             "language": "Languages",
+            "profile": "graph" if profiles.raw is not None else "env",
             "curator": {
                 "enabled": settings.curator_enabled,
                 "pools": {k: store.pool_size(k) for k in curator.enabled_kinds(settings)}
@@ -121,7 +126,7 @@ def create_app(
             if kind not in curator.enabled_kinds(settings):
                 raise HTTPException(400, f"{kind} is not curated here")
             only = [kind]
-        return await curator.curate(request.app.state.client, settings, store, only=only)
+        return await curator.curate(request.app.state.client, settings, store, only=only, profiles=profiles)
 
     @app.get("/api/feed")
     async def feed(

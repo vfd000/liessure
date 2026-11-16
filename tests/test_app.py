@@ -426,3 +426,128 @@ def test_parse_picks_rejects_junk():
     assert curator.parse_picks("[1, 2]", {"a"}) == []
     got = curator.parse_picks('{"picks":[{"id":"a","score":"11","why":"x","article":"T"},{"id":"b","score":5}]}', {"a"})
     assert got == [{"id": "a", "score": 10, "why": "x", "article": "T"}]
+
+
+# ------------------------------------------------------------ graph profile
+
+PROFILE = {
+    "person": {"id": "x", "kind": "person", "name": "Axl Liess", "visibility": "household"},
+    "home": {"place": "Home", "lat": 47.65, "lon": -122.35, "address": "Fremont, Seattle"},
+    "interests": {
+        "love": [{"topic": "Pacific Northwest geology", "category": "subject"},
+                 {"topic": "Backpacking", "category": "activity"}],
+        "like": [{"topic": "Documentaries", "category": "genre"}],
+        "curious": [{"topic": "Tagalog", "category": "language", "wikidata": "Q34057"},
+                    {"topic": "Cantonese", "category": "language", "wikidata": "Q9186"}],
+        "avoid": [{"topic": "Outrage politics", "category": "genre"}],
+    },
+    "languages": [
+        {"language": "Mandarin Chinese", "level": "learning", "priority": 1, "wikidata": "Q9192"},
+        {"language": "Telugu", "level": "learning", "priority": 2, "wikidata": "Q8097"},
+        {"language": "English", "level": "native", "priority": None, "wikidata": "Q1860"},
+        {"language": "Spanish", "level": "fluent", "priority": None, "wikidata": "Q1321"},
+    ],
+    "projects": [{"project": "WTR MAX migration", "status": "active", "role": None, "topics": ["Proxmox"]},
+                 {"project": "Old blog", "status": "done", "role": None, "topics": ["Blogging"]}],
+}
+
+
+def graph_backend(posted, inner=fake_backend, profile_status=200):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "graph.test":
+            assert request.headers["authorization"] == "Bearer gt"
+            if request.url.path == "/api/profile/Axl":
+                return httpx.Response(profile_status, json=PROFILE)
+            if request.url.path == "/api/facts":
+                body = json.loads(request.content)
+                posted.append(body)
+                return httpx.Response(201, json={"created": True, "status": "proposed", **body})
+        if request.url.host == "en.wikipedia.org" and request.url.params.get("prop") == "pageprops":
+            return httpx.Response(200, json={"query": {"pages": [
+                {"title": request.url.params["titles"], "pageprops": {"wikibase_item": "Q123"}}]}})
+        return inner(request)
+    return handler
+
+
+def test_profile_from_graph_replaces_env_defaults():
+    from app import profile as prof
+    s = prof.apply(full_settings(), PROFILE)
+    assert s.languages_learning == [("Mandarin Chinese", "zh"), ("Telugu", "te")]
+    assert s.languages_fluent == [("English", "en"), ("Spanish", "es")]
+    assert s.languages_curious == [("Tagalog", "tl"), ("Cantonese", "zh-yue")]
+    assert s.home_coords == (47.65, -122.35) and s.home_name == "Fremont, Seattle"
+    assert s.wiki_interests == ["Pacific Northwest geology", "Backpacking", "Proxmox"]  # genres and done projects left out
+    text = s.curator_profile
+    assert "Loves: Pacific Northwest geology, Backpacking." in text
+    assert "Learning Mandarin Chinese now, then Telugu." in text
+    assert "Leave out anything that is mainly: Outrage politics." in text
+    assert "Working on: WTR MAX migration." in text and "Old blog" not in text
+
+
+def test_curator_prompts_use_the_graph_profile():
+    calls, posted = [], []
+    s = full_settings(llm_url="http://llm.test", llm_key="llmk", graph=Service("http://graph.test"),
+                      graph_token="gt", curator_share=1.0)
+    app = create_app(s, transport=httpx.MockTransport(graph_backend(posted, fake_llm(calls))),
+                     store=Store(":memory:"), run_curator=False)
+    with TestClient(app) as c:
+        assert c.get("/api/sources").json()["profile"] == "graph"
+        c.post("/api/curate?kind=wikipedia")
+        _, prompt = prompt_for(calls, "These are Wikipedia articles")
+        assert "Leave out anything that is mainly: Outrage politics" in prompt
+        assert "(near home (Fremont, Seattle)) Place at 47.65" in prompt
+        assert "(interest: " in prompt and "linguistics" not in prompt  # graph interests, not the test's env list
+        labels = {c.get("/api/card/language").json()["label"] for _ in range(40)}
+        assert any(l.startswith("Mandarin Chinese") for l in labels)
+
+
+def test_graph_down_falls_back_to_env():
+    posted = []
+    s = full_settings(graph=Service("http://graph.test"), graph_token="gt")
+    app = create_app(s, transport=httpx.MockTransport(graph_backend(posted, profile_status=503)),
+                     store=Store(":memory:"), run_curator=False)
+    with TestClient(app) as c:
+        assert c.get("/api/sources").json()["profile"] == "env"
+        assert c.get("/api/card/language").status_code == 200
+
+
+def test_noticed_interests_are_proposed_with_evidence_once_a_week():
+    import asyncio
+
+    from app import curator as cur
+    from app import profile as prof
+
+    posted = []
+    s = full_settings(llm_url="http://llm.test", llm_key="llmk", graph=Service("http://graph.test"), graph_token="gt")
+    store = Store(":memory:")
+    titles = ["Mount St. Helens", "Glacier Peak", "Mount Baker", "Lahar", "Bread", "Sourdough starter",
+              "Mount Adams", "Mount Hood"]
+    for t in titles:
+        store.record("wikipedia", t, "open", t)
+
+    async def fake_ask(client, s, prompt, system=""):
+        assert system == prof.PROPOSE_SYSTEM and "pacific northwest geology" in prompt  # known topics, skipped
+        return json.dumps({"interests": [
+            {"topic": "Cascade Volcanoes", "category": "subject", "level": "like",
+             "statement": "Has been reading about Cascade volcanoes",
+             "evidence": ["Mount St. Helens", "Glacier Peak", "Mount Baker"]},
+            {"topic": "Bread", "level": "like", "evidence": ["Bread"]},           # one item is not a pattern
+            {"topic": "Backpacking", "level": "love", "evidence": titles[:3]},     # already known
+            {"topic": "Invented", "level": "like", "evidence": ["Not opened", "Also not"]},
+        ]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(graph_backend(posted))) as client:
+            cache = prof.ProfileCache(s)
+            await cache.get(client)
+            from datetime import date as d
+            return await prof.propose_interests(client, s, store, cache, fake_ask, today=d(2026, 11, 16))
+
+    assert asyncio.run(run()) == 1
+    assert len(posted) == 1
+    body = posted[0]
+    assert body["about"] == "Axl" and body["kind"] == "interest" and body["source"] == "liessure"
+    assert body["details"] == {"topic": "Cascade Volcanoes", "level": "like", "category": "subject", "wikidata": "Q123"}
+    assert body["source_ref"] == "interest:Q123:2026-W47"
+    assert body["quote"] == "Mount St. Helens; Glacier Peak; Mount Baker"
+    assert cur is not None

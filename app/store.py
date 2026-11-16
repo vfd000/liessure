@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS events (
     title   TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS events_kind_ts ON events (kind, ts);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS rejected (
     kind TEXT NOT NULL, ref TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (kind, ref)
 );
@@ -78,6 +79,25 @@ class Store:
                 (kind, limit),
             ).fetchall()
         return [r["title"] for r in rows]
+
+    def events_since(self, days: float) -> list[tuple[str, str]]:
+        """(kind, title) of distinct things opened or played, newest first."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT kind, title, MAX(ts) t FROM events WHERE ts >= ? AND title != '' "
+                "GROUP BY kind, title ORDER BY t DESC",
+                (time.time() - days * 86400,),
+            ).fetchall()
+        return [(r["kind"], r["title"]) for r in rows]
+
+    def get_meta(self, key: str) -> str | None:
+        with self._lock:
+            row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock, self._db:
+            self._db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
     # --- curated pool
     def known(self, kind: str) -> set[str]:
