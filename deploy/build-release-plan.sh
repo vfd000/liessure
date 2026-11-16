@@ -21,13 +21,18 @@ CSUM="$(printf '%s\n' "$COMPOSE" | sha256sum | cut -d' ' -f1)"
 SHORT="$(git rev-parse --short "$COMMIT")"
 grep -q '^LIESSURE_COMPOSE_EOF$' <<<"$COMPOSE" && { echo "marker collision" >&2; exit 1; }
 
-CHANGES="ct 163: installs /opt/liessure/docker-compose.yml from vfd000/liessure $SHORT (data, sha256-checked; previous copy kept)
+CHANGES="ct 163: read-only preflight: hostname is liessure, /opt/liessure/.env exists, reads its current
+        LIESSURE_IMAGE line (an image name, not a secret) and the liessure container's start time, if any
+ct 163: installs /opt/liessure/docker-compose.yml from vfd000/liessure $SHORT (data, sha256-checked; the previous
+        copy is kept as docker-compose.yml.prev and deleted at the end of a successful run)
 ct 163: sets LIESSURE_IMAGE=$IMAGE in /opt/liessure/.env (replacing the previous LIESSURE_IMAGE line, kept for rollback)
 ct 163: docker compose pull (that digest, from ghcr.io; public, no credentials) and up -d: (re)creates the liessure
-        container, which runs the new image with the settings in .env; the liessure-data volume is kept
-ct 163: checks /healthz and /api/sources inside the CT (status only, no secret printed)
-ct 163: on failure puts back the previous compose file and LIESSURE_IMAGE and runs up -d again (or stops the
-        container if there was no previous release)
+        container (and, on the first release, its network and the liessure-data volume), which runs the new image
+        with every setting in .env passed in as its environment; an existing liessure-data volume is kept
+ct 163: checks: /healthz answers within 60 s, the container's start time moved and it runs exactly that image;
+        then prints the first 1200 bytes of /api/sources (which kinds are configured; no secret values)
+ct 163: on failure prints the container's last 40 log lines, puts back the previous compose file and LIESSURE_IMAGE
+        and runs up -d again, or, if there was no previous release, docker compose down (the volume is kept)
 wtr: none - only relays the commands into ct 163 with pct exec"
 { echo "Release Liessure $SHORT to CT 163 on wtr: image $IMAGE."; echo "CHANGES:"; echo "$CHANGES"; } >&2
 
