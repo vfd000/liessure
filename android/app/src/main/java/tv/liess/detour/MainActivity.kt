@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.security.KeyChain
 import android.view.WindowInsets
 import android.webkit.ClientCertRequest
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -59,8 +60,10 @@ class MainActivity : Activity() {
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
+            mediaPlaybackRequiresUserGesture = false
             userAgentString = "$userAgentString DetourAndroid/${BuildConfig.VERSION_NAME}"
         }
+        CookieManager.getInstance().setAcceptThirdPartyCookies(web, true) // Invidious embeds
         web.addJavascriptInterface(Bridge(), "DetourAndroid")
         web.webChromeClient = WebChromeClient()
         web.webViewClient = Client()
@@ -139,6 +142,7 @@ class MainActivity : Activity() {
     inner class Client : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val uri = request.url
+            if (!request.isForMainFrame) return false // inline players (iframes) stay put
             if ((uri.scheme == "https" || uri.scheme == "http") && uri.host in inAppHosts) return false
             openExternal(uri.toString())
             return true

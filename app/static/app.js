@@ -43,10 +43,19 @@ function renderCard(c) {
   body.append(el("div", "label", c.label));
   body.append(el("h2", "title", c.title));
   if (c.subtitle) body.append(el("div", "subtitle", c.subtitle));
-  if (c.blurb) body.append(el("p", "blurb", c.blurb));
+  if (c.blurb) {
+    const p = el("p", "blurb clamp", c.blurb);
+    p.onclick = () => p.classList.toggle("clamp");
+    body.append(p);
+  }
 
   const actions = el("div", "actions");
-  const go = el("a", "primary", "Open");
+  if (c.embed && c.embed.src) {
+    const play = el("button", "primary", "▶ " + (c.embed.label || "Play here"));
+    play.onclick = () => { playInline(card, c.embed); play.remove(); };
+    actions.append(play);
+  }
+  const go = el("a", c.embed && c.embed.src ? "" : "primary", "Open");
   go.href = c.url;
   go.target = "_blank";
   go.rel = "noopener";
@@ -70,6 +79,34 @@ function renderCard(c) {
 
   if (c.image) card.querySelector(".media").onclick = () => openUrl(c.url);
   return card;
+}
+
+// Only one thing plays at a time, like a feed should.
+let playing = null;
+function playInline(card, embed) {
+  if (playing && playing !== card) stopInline(playing);
+  playing = card;
+  let player;
+  if (embed.type === "audio") {
+    player = el("audio", "player");
+    player.controls = true;
+    player.autoplay = true;
+    player.src = embed.src;
+  } else {
+    player = el("div", "player video");
+    const f = document.createElement("iframe");
+    f.src = embed.src;
+    f.allow = "autoplay; fullscreen; picture-in-picture";
+    f.allowFullscreen = true;
+    player.append(f);
+  }
+  const media = card.querySelector(".media");
+  if (embed.type === "video" && media) media.replaceWith(player);
+  else card.querySelector(".body").append(player);
+}
+function stopInline(card) {
+  card.querySelectorAll("audio").forEach((a) => a.pause());
+  card.querySelectorAll(".player.video").forEach((v) => v.remove());
 }
 
 async function load(n = 6) {

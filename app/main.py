@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 
 from . import sources
@@ -113,6 +115,34 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         if r.status_code != 200 or not ctype.startswith("image/"):
             raise HTTPException(502, "image fetch failed")
         return Response(r.content, media_type=ctype, headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.get("/stream/audio/{item_id}")
+    async def stream_audio(request: Request, item_id: str):
+        """Jellyfin audio, proxied so the page needs no Jellyfin token. Passes Range through for seeking."""
+        if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", item_id) or not (settings.jellyfin.url and settings.jellyfin_token):
+            raise HTTPException(404)
+        params = {
+            "Container": "mp3,aac,m4a|aac,flac,ogg,opus,webm|opus",
+            "TranscodingContainer": "mp3", "TranscodingProtocol": "http", "AudioCodec": "mp3",
+            "MaxStreamingBitrate": "320000",
+        }
+        if settings.jellyfin_user_id:
+            params["UserId"] = settings.jellyfin_user_id
+        headers = sources.auth_headers_for(settings, settings.jellyfin.url + "/") or {}
+        if "range" in request.headers:
+            headers = {**headers, "Range": request.headers["range"]}
+        client: httpx.AsyncClient = request.app.state.client
+        upstream = await client.send(
+            client.build_request("GET", f"{settings.jellyfin.url}/Audio/{item_id}/universal", params=params, headers=headers),
+            stream=True,
+        )
+        if upstream.status_code not in (200, 206):
+            await upstream.aclose()
+            raise HTTPException(502, "jellyfin refused the stream")
+        passthrough = {k: v for k, v in upstream.headers.items()
+                       if k.lower() in ("content-type", "content-length", "content-range", "accept-ranges")}
+        return StreamingResponse(upstream.aiter_raw(), status_code=upstream.status_code, headers=passthrough,
+                                 background=BackgroundTask(upstream.aclose))
 
     @app.get("/")
     async def index():

@@ -15,6 +15,10 @@ RM = "http://romm.test"
 INV = "http://inv.test"
 
 
+async def _agen(data):
+    yield data
+
+
 def fake_backend(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
     host, path = request.url.host, request.url.path
@@ -30,10 +34,16 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
         t = request.url.params["IncludeItemTypes"]
         item = {"Id": "abc", "ServerId": "srv", "Name": f"A {t}", "ProductionYear": 1999,
                 "Genres": ["Drama"], "ImageTags": {"Primary": "t"}, "Album": "LP",
-                "AlbumArtist": "Band", "AlbumId": "alb"}
+                "AlbumArtist": "Band", "AlbumId": "alb",
+                "RemoteTrailers": [{"Url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}]}
         return httpx.Response(200, json={"Items": [item]})
     if host == "jf.test" and "/Images/" in path:
         return httpx.Response(200, content=b"img", headers={"content-type": "image/jpeg"})
+    if host == "jf.test" and path.startswith("/Audio/"):
+        assert "Token=\"jft\"" in request.headers["authorization"]
+        if request.headers.get("range") == "bytes=0-1":
+            return httpx.Response(206, content=_agen(b"ID"), headers={"content-type": "audio/mpeg", "content-range": "bytes 0-1/4"})
+        return httpx.Response(200, content=_agen(b"ID3x"), headers={"content-type": "audio/mpeg"})
     if host == "im.test" and path == "/api/search/random":
         assert request.headers["x-api-key"] == "imk"
         return httpx.Response(200, json=[{"id": "p1", "localDateTime": "2024-05-01T10:00:00",
@@ -130,3 +140,19 @@ def test_index_served(client):
     r = client.get("/")
     assert r.status_code == 200 and "Detour" in r.text
     assert client.get("/app.js").status_code == 200
+
+
+def test_inline_embeds(client):
+    song = client.get("/api/card/song").json()
+    assert song["embed"]["type"] == "audio" and song["embed"]["src"] == "/stream/audio/abc"
+    movie = client.get("/api/card/movie").json()
+    assert movie["embed"]["src"] == "https://watch.example/embed/dQw4w9WgXcQ?autoplay=1"
+    assert client.get("/api/card/video").json()["embed"]["src"].startswith("https://watch.example/embed/long1")
+
+
+def test_audio_stream_proxy(client):
+    r = client.get("/stream/audio/abcdef12")
+    assert r.status_code == 200 and r.content == b"ID3x" and r.headers["content-type"] == "audio/mpeg"
+    r = client.get("/stream/audio/abcdef12", headers={"Range": "bytes=0-1"})
+    assert r.status_code == 206 and r.headers["content-range"] == "bytes 0-1/4"
+    assert client.get("/stream/audio/..%2Fetc").status_code == 404

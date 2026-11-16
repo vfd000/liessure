@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import random
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import date
@@ -36,6 +37,8 @@ class Card:
     image: str = ""
     # Extra buttons. {"label": ..., "url": ...} or {"label": ..., "app": "<android package>"}
     actions: list[dict[str, str]] = field(default_factory=list)
+    # Something to consume right in the feed: {"type": "audio"|"video", "src": ...}
+    embed: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -121,7 +124,7 @@ def _wiki_card(data: dict[str, Any], kind: str, label: str) -> Card:
         label=label,
         title=data.get("title") or "Wikipedia",
         subtitle=data.get("description") or "",
-        blurb=_clip(data.get("extract"), 420),
+        blurb=_clip(data.get("extract"), 1500),
         image=((data.get("originalimage") or data.get("thumbnail") or {}).get("source") or ""),
         url=page,
     )
@@ -163,7 +166,7 @@ async def _jellyfin_random(
         "Recursive": "true",
         "SortBy": "Random",
         "Limit": "1",
-        "Fields": "Overview,Genres,ProductionYear",
+        "Fields": "Overview,Genres,ProductionYear,RemoteTrailers",
         "EnableImageTypes": "Primary",
     }
     base = f"{s.jellyfin.url}/Items"
@@ -203,7 +206,23 @@ async def _jellyfin_video(
         blurb=_clip(item.get("Overview")),
         image=_jellyfin_image(s, item["Id"]) if (item.get("ImageTags") or {}).get("Primary") else "",
         url=_jellyfin_link(s, item),
+        embed=_trailer_embed(s, item),
     )
+
+
+def _youtube_id(url: str) -> str:
+    m = re.search(r"(?:v=|youtu\.be/|/embed/)([A-Za-z0-9_-]{11})", url or "")
+    return m.group(1) if m else ""
+
+
+def _trailer_embed(s: Settings, item: dict[str, Any]) -> dict[str, str]:
+    if not s.invidious.link_base:
+        return {}
+    for t in item.get("RemoteTrailers") or []:
+        vid = _youtube_id(t.get("Url", ""))
+        if vid:
+            return {"type": "video", "label": "Watch the trailer", "src": f"{s.invidious.link_base}/embed/{vid}?autoplay=1"}
+    return {}
 
 
 async def movie(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
@@ -239,6 +258,7 @@ async def song(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
         image=image,
         url=_jellyfin_link(s, item),
         actions=actions,
+        embed={"type": "audio", "label": "Play here", "src": f"/stream/audio/{item['Id']}"},
     )
 
 
@@ -403,6 +423,7 @@ def _video_card(s: Settings, v: dict[str, Any], kind: str, label: str) -> Card:
         blurb=_clip(v.get("description"), 240),
         image=proxied(f"{s.invidious.url}/vi/{quote(vid)}/mqdefault.jpg"),
         url=f"{s.invidious.link_base}/watch?v={quote(vid)}",
+        embed={"type": "video", "label": "Play here", "src": f"{s.invidious.link_base}/embed/{quote(vid)}?autoplay=1"},
     )
 
 

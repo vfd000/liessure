@@ -35,6 +35,11 @@ the API (can be a LAN address); `*_PUBLIC_URL` is what goes into the links
 you tap. Mix is tuned with `DETOUR_WEIGHTS`, e.g.
 `language=5,photo=3,wikipedia=2,game=0`.
 
+Cards are meant to be consumed in place, like a feed: Wikipedia text
+expands on tap, photos are full width, songs play inline (`/stream/audio`
+proxies Jellyfin with Range support), videos and movie trailers play in an
+inline Invidious embed. "Open" goes to the real thing.
+
 Credentials stay server-side. Images from household services go through
 `/img`, which only fetches from the configured service bases.
 
@@ -73,12 +78,14 @@ Not done yet (needs the LXC):
 ## Android
 
 `android.yml` builds on GitHub-hosted runners (PRs never touch the
-self-hosted one). On `main` it publishes the APK as the **android-latest**
-release, so the phone can grab it from the releases page.
+self-hosted one). Each signed build on `main` becomes a GitHub release
+tagged `v0.1.<run>` with the APK attached, which is what **Obtainium** tracks.
 
-- Set `DETOUR_KEYSTORE_B64` / `DETOUR_KEYSTORE_PASSWORD` / `DETOUR_KEY_ALIAS` /
-  `DETOUR_KEY_PASSWORD` secrets so builds update in place; without them the
-  APK is debug-signed with a key that changes per build.
+- Once: `scripts/make-keystore.sh vfd000/detour` creates the signing key and
+  sets the four `DETOUR_KEY*` secrets. Unsigned builds are never released,
+  because a changing debug key would make Android refuse the update.
+- Obtainium: add the repo URL. The repo is private, so give Obtainium a
+  fine-grained GitHub token with read-only Contents on this repo.
 - The web app URL is baked in from `android/gradle.properties` (`detourUrl`).
 - **Catching Reddit links:** Settings → Apps → Detour → Open by default →
   Add link → tick the reddit hosts. (Reddit's own app, if installed, has to
