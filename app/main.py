@@ -203,5 +203,3 @@ def create_app(
     app.mount("/", StaticFiles(directory=STATIC), name="static")
     return app
 
-
-app = create_app()

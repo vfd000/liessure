@@ -121,7 +121,7 @@ the `liessure-data` volume.
 
 ```sh
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+DATA_DIR=./data uvicorn --factory app.main:create_app --reload
 python -m pytest -q
 ```
 
