@@ -18,6 +18,8 @@
 #           waits for /healthz, then prints the first 1200 bytes of /api/sources (which kinds are on; no secrets)
 #   On any failure after the Jellyfin key exists: deletes that key in Jellyfin (DELETE /Auth/Keys/<key>), shreds
 #   the minted file, and puts the three .env lines back to empty.
+#   wtr: none - only relays commands with pct exec; ssh to axl@10.11.2.233 uses BatchMode and
+#   StrictHostKeyChecking=accept-new (the deploy user already knows wtr's key, so a changed key still fails)
 # END CHANGES
 #
 # Liessure's Jellyfin and Immich keys, without anyone typing a key.
