@@ -153,27 +153,33 @@ python -m pytest -q
 
 ## Deploy
 
-Same pattern as the other service repos (`runner-on-the-box` in `bb`):
-merge to `main` → `deploy.yml` on the self-hosted runner `liessure-r7` on
-Liessure's own LXC → `rsync` to `/opt/liessure` → `docker compose up -d --build`.
-Non-secret settings are GitHub Actions **variables**, credentials are
-**secrets** (`JELLYFIN_TOKEN`, `IMMICH_API_KEY`, `ROMM_TOKEN`/`ROMM_PASSWORD`).
+Liessure runs as one container in CT 163 on wtr (10.11.2.56:8000, firewall:
+NPM only), created by the deploy-worker plan `deploy/ct-plan.sh`.
 
-Not done yet (needs the LXC):
+1. **Build:** every push to `main` that touches the app runs
+   `.github/workflows/image.yml` on GitHub, which publishes
+   `ghcr.io/vfd000/liessure` (a public package: the image holds code, never
+   secrets). The run summary prints the release command.
+2. **Release:** `bash deploy/build-release-plan.sh ghcr.io/vfd000/liessure@sha256:<digest> <commit>`
+   builds a deploy-worker plan that installs that commit's
+   `docker-compose.yml`, pins `LIESSURE_IMAGE` to the digest in
+   `/opt/liessure/.env`, pulls and recreates the container, and rolls back
+   if the health check fails. axl approves it on approvals.liess.tv.
 
-- [ ] LXC + runner `liessure-r7`, `/opt/liessure` owned by the runner user
-- [ ] NPM host `liessure.liess.tv` with its own DNS-01 cert, on the
-      gatekeeper list + mTLS door (the app has no login of its own yet)
-- [ ] Per-CT firewall: 8000 from NPM only
-- [ ] Alloy log shipping, inventory rows
-- [ ] A Jellyfin API key, a read-only Immich key, a RomM credential
-- [ ] A LiteLLM virtual key scoped to `fast-haiku` only, as secret `LLM_KEY`;
-      `LLM_URL=https://llm.liess.tv` (LAN-only, which the LXC is)
-- [ ] A travel API token as secret `TRAVEL_TOKEN`, `TRAVEL_URL=https://travel.liess.tv`
-- [ ] The household graph's bot token as secret `GRAPH_TOKEN`,
-      `GRAPH_URL=https://graph.liess.tv` (after the graph's interests change is deployed)
-- [ ] Check the Seattle Times feed: subscriber links open in the browser or
-      app where you're signed in, but the feed itself is public headlines
+Settings and secrets live only in `/opt/liessure/.env` (0600) on the box.
+The graph and travel tokens were copied in by the CT plan; the LLM key is
+minted into it by its own plan; Jellyfin, Immich and RomM keys are added
+there by hand (see below). Nothing is stored in GitHub secrets.
+
+Still to do:
+
+- [ ] NPM host `liessure.liess.tv` -> 10.11.2.56:8000 with its own DNS-01
+      cert, access list 4 + the gatekeeper mTLS door; DHCP reservation for
+      10.11.2.56
+- [ ] LLM gateway key (plan), then Jellyfin / Immich / RomM read keys in .env
+- [ ] Alloy log shipping, a service-config-backup row for the
+      `liessure-data` volume, inventory rows, and `ansible/wtr/guests/163.yml`
+      in bb so wtr's ansible knows the guest
 
 ## Android
 

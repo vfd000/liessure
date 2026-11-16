@@ -1,61 +1,22 @@
-# Deployed to /opt/liessure by .github/workflows/deploy.yml (self-hosted runner
-# on the service's own LXC). Secrets come in as env vars from GitHub Actions
-# secrets; nothing is written to disk. Every source is optional.
+# Liessure in /opt/liessure on its own CT (163 on wtr).
+#
+# The image is built by .github/workflows/image.yml and published to
+# ghcr.io/vfd000/liessure. A deploy-worker release plan (deploy/build-release-plan.sh)
+# pins it by digest: it sets LIESSURE_IMAGE=ghcr.io/vfd000/liessure@sha256:...
+# in /opt/liessure/.env, then `docker compose pull && up -d`.
+#
+# Every setting and secret comes from /opt/liessure/.env (0600), which lives
+# only on the box. Locally: `docker compose up --build` with your own .env.
 services:
   liessure:
+    image: ${LIESSURE_IMAGE:-liessure:local}
     build: .
-    image: liessure:local
     restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file: .env
     volumes:
       - liessure-data:/data   # curated pool + open/play history (SQLite)
-    environment:
-      LIESSURE_WEIGHTS: ${LIESSURE_WEIGHTS:-}
-      WIKIPEDIA_LANG: ${WIKIPEDIA_LANG:-en}
-      JELLYFIN_URL: ${JELLYFIN_URL:-}
-      JELLYFIN_PUBLIC_URL: ${JELLYFIN_PUBLIC_URL:-}
-      JELLYFIN_TOKEN: ${JELLYFIN_TOKEN:-}
-      JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:-}
-      IMMICH_URL: ${IMMICH_URL:-}
-      IMMICH_PUBLIC_URL: ${IMMICH_PUBLIC_URL:-}
-      IMMICH_API_KEY: ${IMMICH_API_KEY:-}
-      ROMM_URL: ${ROMM_URL:-}
-      ROMM_PUBLIC_URL: ${ROMM_PUBLIC_URL:-}
-      ROMM_TOKEN: ${ROMM_TOKEN:-}
-      ROMM_USERNAME: ${ROMM_USERNAME:-}
-      ROMM_PASSWORD: ${ROMM_PASSWORD:-}
-      INVIDIOUS_URL: ${INVIDIOUS_URL:-}
-      INVIDIOUS_PUBLIC_URL: ${INVIDIOUS_PUBLIC_URL:-}
-      INVIDIOUS_TOPICS: ${INVIDIOUS_TOPICS:-}
-      INVIDIOUS_WATCH_TOKEN: ${INVIDIOUS_WATCH_TOKEN:-}
-      LLM_URL: ${LLM_URL:-}
-      LLM_KEY: ${LLM_KEY:-}
-      LLM_MODEL: ${LLM_MODEL:-fast-haiku}
-      CURATOR_PROFILE: ${CURATOR_PROFILE:-}
-      CURATOR_CHANNELS: ${CURATOR_CHANNELS:-}
-      CURATE_EVERY_HOURS: ${CURATE_EVERY_HOURS:-12}
-      CURATOR_SHARE: ${CURATOR_SHARE:-}
-      NEWS_FEEDS: ${NEWS_FEEDS:-}
-      NEWS_MAX_AGE_HOURS: ${NEWS_MAX_AGE_HOURS:-}
-      LINGOPIE_URL: ${LINGOPIE_URL:-}
-      LANGUAGE_CHANNELS: ${LANGUAGE_CHANNELS:-}
-      HOME_NAME: ${HOME_NAME:-}
-      HOME_COORDS: ${HOME_COORDS:-}
-      WIKI_INTERESTS: ${WIKI_INTERESTS:-}
-      ARGOSY: ${ARGOSY:-}
-      VIDEO_LINK: ${VIDEO_LINK:-}
-      NEBULA_FEEDS: ${NEBULA_FEEDS:-}
-      TRAVEL_URL: ${TRAVEL_URL:-}
-      CURATOR_VISION: ${CURATOR_VISION:-}
-      LANGUAGES_LEARNING: ${LANGUAGES_LEARNING:-}
-      LANGUAGES_CURIOUS: ${LANGUAGES_CURIOUS:-}
-      LANGUAGES_FLUENT: ${LANGUAGES_FLUENT:-}
-      TRAVEL_TOKEN: ${TRAVEL_TOKEN:-}
-      GRAPH_URL: ${GRAPH_URL:-}
-      GRAPH_TOKEN: ${GRAPH_TOKEN:-}
-      GRAPH_PERSON: ${GRAPH_PERSON:-}
-      LANGUAGE_PRACTICE_URL: ${LANGUAGE_PRACTICE_URL:-}
 
 volumes:
   liessure-data:
