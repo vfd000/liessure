@@ -3,7 +3,8 @@
 #   wtr: picks the next free guest id (pvesh get /cluster/nextid; refuses one >= 200 or with a guests/<id>.yml)
 #   wtr: writes /etc/pve/firewall/<id>.fw BEFORE the CT exists: TCP 8000 from NPM 10.11.14.18 only, dropped otherwise
 #   wtr: creates CT <id> 'liessure' (Debian 13 template from storage local, unprivileged, nesting=1,keyctl=1,
-#        2 cores, 1024 MB, 512 MB swap, 8 GB on nvme, vmbr0 VLAN tag 2, DHCP, firewall=1, onboot, tag liessure)
+#        2 cores, 1024 MB, 512 MB swap, 8 GB on nvme, vmbr0 VLAN tag 2, DHCP, firewall=1, onboot, tag liessure,
+#        timezone America/Los_Angeles)
 #        and starts it
 #   ct <id>: apt installs docker.io docker-cli docker-compose curl ca-certificates rsync git
 #   ct <id>: creates a locked user 'runner' in the docker group (its GitHub runner is registered later, by hand,

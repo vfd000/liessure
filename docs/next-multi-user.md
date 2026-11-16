@@ -44,3 +44,17 @@ the household graph (Dani: K-dramas, Disney; axl: everything in
 
 Cross-user play history (RomM only returns a user's own; reading it for
 everyone needs direct database access, which isn't worth opening up).
+
+## Later: session cards
+
+Cards for Claude sessions that need axl or have finished, so the feed is
+also where he catches up on the fleet. Source: the session hub's
+`scripts/claude-fleet/fleet.py brief` (bb, on the agent box): each session's
+`needs input:` question and what changed since the last brief, plus the
+deploy worker's `list_deploys` for anything `proposed` (needs an approval
+click) or failed. Card kinds: "needs you" (the question, a tap opens that
+session in the agents.liess.tv console), "approval waiting" (opens
+approvals.liess.tv/d/<id>), "done" (the session's own summary). Reading
+fleet state needs an endpoint on the agent box, or the box pushing a small
+JSON to Liessure; never the box's credentials in Liessure. Answers stay in
+the console: a card links, it doesn't act.
