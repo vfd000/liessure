@@ -14,6 +14,11 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="https" />
         </intent>
+        <intent>
+            <!-- Argosy: argosy://launch?romm_id=N starts a RomM game -->
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="argosy" />
+        </intent>
     </queries>
 
     <application

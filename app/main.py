@@ -94,7 +94,7 @@ def create_app(
     async def list_sources():
         avail = sources.configured(settings)
         return {
-            "language": settings.language_name,
+            "language": "Languages",
             "curator": {
                 "enabled": settings.curator_enabled,
                 "pools": {k: store.pool_size(k) for k in curator.enabled_kinds(settings)}

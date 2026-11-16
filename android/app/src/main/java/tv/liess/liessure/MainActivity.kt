@@ -101,7 +101,11 @@ class MainActivity : Activity() {
         val intent = if (uri.scheme == "intent") {
             runCatching { Intent.parseUri(raw, Intent.URI_INTENT_SCHEME) }.getOrNull() ?: return
         } else {
-            Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
+            // Web links go to whichever app claims them (YouTube, Immich, a browser). Custom
+            // schemes like argosy:// are handled by apps whose filters lack BROWSABLE.
+            Intent(Intent.ACTION_VIEW, uri).apply {
+                if (uri.scheme == "http" || uri.scheme == "https") addCategory(Intent.CATEGORY_BROWSABLE)
+            }
         }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val target = if (intent.resolveActivity(packageManager)?.packageName == packageName) {

@@ -75,6 +75,7 @@ function renderCard(c) {
       b.onclick = () => android.launchApp(a.app);
       actions.append(b);
     } else if (a.url) {
+      if (a.android && !android) continue; // e.g. argosy:// only means something on the phone
       const l = el("a", "", a.label);
       l.href = a.url;
       l.onclick = (e) => { e.preventDefault(); openUrl(a.url); };

@@ -1,10 +1,12 @@
 # Liessure
 
 When the thumb reaches for Reddit, land here instead: an endless feed of
-things that are actually yours or actually worth it. A random Wikipedia
-article, a game on RomM, a video on Invidious, a movie, series or song on
-Jellyfin (songs can open Symfonium), a photo or "on this day" memory from
-Immich, or a few minutes of Telugu.
+things that are actually yours or actually worth it. A Wikipedia article
+about somewhere you've been or are about to go, a game from RomM you can
+launch straight into Argosy, a video from YouTube or Nebula, a movie,
+series or song on Jellyfin (songs can open Symfonium), a trip photo with a
+caption tying it to what's nearby, a story from the Seattle Times, or a
+couple of minutes of Telugu, Mandarin, or "hello" in Tagalog.
 
 Two front ends, one server:
 
@@ -12,8 +14,9 @@ Two front ends, one server:
   page with infinite scroll and per-kind filter chips.
 - **Android app** (`android/`): a WebView shell that adds what a browser tab
   can't: it can be the handler for `reddit.com` links, opens cards in the app
-  that owns them, launches Symfonium for songs, and answers the gatekeeper's
-  mTLS challenge with the client certificate installed on the phone.
+  that owns them (YouTube, Immich, Nebula, Seattle Times), launches Symfonium
+  for songs and Argosy for games, and answers the gatekeeper's mTLS challenge
+  with the client certificate installed on the phone.
 
 ## Sources
 
@@ -23,13 +26,29 @@ feed, so a fresh deploy shows Wikipedia and language cards only.
 | Kind | Service | Config |
 |---|---|---|
 | `wikipedia` | Wikipedia random article (best of 3 draws, skips stubs) | `WIKIPEDIA_LANG` (default `en`) |
-| `game` | RomM `GET /api/roms` at a random offset; "Play in browser" opens `/rom/{id}/ejs` | `ROMM_URL`, `ROMM_TOKEN` *or* `ROMM_USERNAME` + `ROMM_PASSWORD` |
-| `video` | Invidious search over a topic list; drops Shorts and anything under 3 min | `INVIDIOUS_URL`, `INVIDIOUS_TOPICS` (`a|b|c`) |
-| `movie`, `show` | Jellyfin random item, unwatched first if a user id is set | `JELLYFIN_URL`, `JELLYFIN_TOKEN`, `JELLYFIN_USER_ID` |
-| `song` | Jellyfin random track; "Open Symfonium" on Android | same, plus `MUSIC_APP_PACKAGE` / `MUSIC_APP_NAME` |
+| `game` | RomM random game. On Android, "Play in Argosy" fires `argosy://launch?romm_id=N` (Argosy downloads it if needed and starts the emulator); "Play in browser" opens EmulatorJS | `ROMM_URL`, `ROMM_TOKEN` *or* `ROMM_USERNAME` + `ROMM_PASSWORD`, `ARGOSY` |
+| `video` | Invidious search over a topic list (no Shorts, nothing under 3 min), plus Nebula's RSS feeds | `INVIDIOUS_URL`, `INVIDIOUS_TOPICS`, `NEBULA_FEEDS`, `VIDEO_LINK` |
+| `movie`, `show` | Jellyfin random item, unwatched first if a user id is set; trailer plays inline | `JELLYFIN_URL`, `JELLYFIN_TOKEN`, `JELLYFIN_USER_ID` |
+| `song` | Jellyfin random track, plays inline; "Open Symfonium" on Android | same, plus `MUSIC_APP_PACKAGE` / `MUSIC_APP_NAME` |
 | `photo` | Immich `search/random`, or a today's memory about a third of the time | `IMMICH_URL`, `IMMICH_API_KEY` (read scopes only) |
-| `news` | RSS/Atom feeds (NPR, BBC World, Guardian Science, Ars Technica, HN best by default), last 72 h | `NEWS_FEEDS` (`a|b|c`), `NEWS_MAX_AGE_HOURS` |
-| `language` | Practice drill link, Lingopie, Telugu Wikipedia, Telugu videos via Invidious, curated resources | `LANGUAGE_NAME`, `LANGUAGE_WIKIPEDIA`, `LANGUAGE_PRACTICE_URL`, `LANGUAGE_VIDEO_QUERIES` |
+| `news` | RSS/Atom: Seattle Times, NPR, BBC World, Guardian Science, Ars Technica, HN best by default; last 72 h | `NEWS_FEEDS` (`a|b|c`), `NEWS_MAX_AGE_HOURS` |
+| `language` | For a language you're learning (the first twice as often): practice drill, its Wikipedia, learner videos, Lingopie, dictionaries and pronunciation | `LANGUAGES_LEARNING`, `LANGUAGE_PRACTICE_URL`, `LINGOPIE_URL` |
+
+**Videos:** "Open" goes to the YouTube app by default (`VIDEO_LINK=youtube`),
+with an Invidious button beside it; `VIDEO_LINK=invidious` swaps them once
+Videre works again. The inline player always uses the Invidious embed, so
+watching in the feed stays private either way. Nebula videos open
+nebula.tv, which the Nebula app claims.
+
+**Languages** are `Name:wikipedia-code` lists:
+`LANGUAGES_LEARNING=Telugu:te|Mandarin:zh` (first is current),
+`LANGUAGES_CURIOUS=French:fr|Korean:ko|Cantonese:yue|Japanese:ja|Russian:ru|Ukrainian:uk|Hindi:hi|Indonesian:id|Tagalog:tl`
+(phrase cards only), `LANGUAGES_FLUENT=Spanish:es` (its Wikipedia counts as
+ordinary reading, and Spanish documentaries are in the default topics).
+
+**Lingopie** has no public API: `LINGOPIE_URL` is a deep link the official
+app opens. A separate client that lists what's actually available is a
+follow-up.
 
 Each service also takes `*_PUBLIC_URL`: `*_URL` is where the server calls
 the API (can be a LAN address); `*_PUBLIC_URL` is what goes into the links
@@ -53,13 +72,28 @@ runs low). For each kind it gathers candidates, has the gateway
 your recent opens and per-kind guidance, and keeps the ones scoring at
 least `CURATOR_MIN_SCORE` (7) with a one-line "why":
 
-| Kind | Broad candidates | "More like what you opened" |
+| Kind | Candidates | "More like what you opened" |
 |---|---|---|
-| `video` | `INVIDIOUS_TOPICS` searches, `CURATOR_CHANNELS` uploads | YouTube recommended-next |
-| `language` | `LANGUAGE_VIDEO_QUERIES`, `LANGUAGE_CHANNELS` (judged as a learner) | YouTube recommended-next |
-| `wikipedia` | 20 random + today's 20 most-read | `morelike:` search |
-| `song` | 60 random tracks from Jellyfin | Jellyfin `Similar` |
-| `news` | recent items from `NEWS_FEEDS` (RSS/Atom) | (recent opens inform the prompt) |
+| `wikipedia` | Geosearch near home (`HOME_COORDS`), near places in your last 60 days of photos (home excluded), and near/about upcoming trips from the travel service; searches for `WIKI_INTERESTS`; a little random and most-read; most-read on Spanish Wikipedia | `morelike:` search |
+| `photo` | Geotagged photos, each with the Wikipedia articles within 5 km. The model looks at the thumbnail (`CURATOR_VISION`), picks the article that fits, and writes the caption; the card links to the article | — |
+| `video` | `INVIDIOUS_TOPICS` searches, `CURATOR_CHANNELS` uploads, Nebula feeds | YouTube recommended-next |
+| `language` | Learner videos per learning language, `LANGUAGE_CHANNELS` | YouTube recommended-next |
+| `game` | 60 games from RomM, judged for a session on a phone or handheld | — |
+| `song` | 60 random tracks from Jellyfin, judged for the time of day | Jellyfin `Similar` |
+| `news` | recent items from `NEWS_FEEDS` | (recent opens inform the prompt) |
+
+Each pass also writes six **phrase cards** for random learning or curious
+languages: greetings, thanks, "how much?", "about the language" and so on,
+with script, romanization, meaning and a usage note. They say they're
+LLM-written, and "Open" checks the phrase on Wiktionary (plus a Forvo
+button to hear it).
+
+Wikipedia candidates are labelled with why they're personal ("near your
+photos from 2026-10-02 (Leavenworth)", "upcoming trip: Japan"), and the
+model is told to prefer those. Upcoming trips come from `TRAVEL_URL`'s
+`/api/trips` with `TRAVEL_TOKEN`; the trip format isn't documented, so the
+parser takes names, `start*`/`end*` dates, place names and coordinates from
+whatever fields look like them.
 
 "More like" candidates get first claim on the 80-candidate budget.
 `CURATOR_SHARE` (0.8) of each kind's cards come from its pool and show the
@@ -67,15 +101,12 @@ why; the rest are uncurated so there's still surprise. A pick retires after
 3 showings (news after 2 days). Rejected candidates are remembered for 90
 days so they aren't re-scored.
 
-Candidate text is untrusted. The model can only choose among the ids it was
-sent; anything else it returns is ignored.
+Candidate text is untrusted. The model can only choose among the ids (and,
+for photos, article titles) it was sent; anything else it returns is ignored.
 
 Opens and plays are recorded via `POST /api/event`, which seeds the "more
 like" column. `POST /api/curate[?kind=]` runs a pass now. State is SQLite on
 the `liessure-data` volume.
-
-Lingopie has no public API, so it isn't curated: set `LINGOPIE_URL` and it
-appears as a language card.
 
 ## API
 
@@ -112,6 +143,9 @@ Not done yet (needs the LXC):
 - [ ] A Jellyfin API key, a read-only Immich key, a RomM credential
 - [ ] A LiteLLM virtual key scoped to `fast-haiku` only, as secret `LLM_KEY`;
       `LLM_URL=https://llm.liess.tv` (LAN-only, which the LXC is)
+- [ ] A travel API token as secret `TRAVEL_TOKEN`, `TRAVEL_URL=https://travel.liess.tv`
+- [ ] Check the Seattle Times feed: subscriber links open in the browser or
+      app where you're signed in, but the feed itself is public headlines
 
 ## Android
 

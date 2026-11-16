@@ -39,7 +39,8 @@ DEFAULT_WEIGHTS = {
 KINDS = tuple(DEFAULT_WEIGHTS)
 
 DEFAULT_NEWS_FEEDS = (
-    "https://feeds.npr.org/1001/rss.xml"
+    "https://www.seattletimes.com/feed/"
+    "|https://feeds.npr.org/1001/rss.xml"
     "|https://feeds.bbci.co.uk/news/world/rss.xml"
     "|https://www.theguardian.com/science/rss"
     "|https://feeds.arstechnica.com/arstechnica/index"
@@ -47,11 +48,26 @@ DEFAULT_NEWS_FEEDS = (
 )
 
 DEFAULT_PROFILE = (
-    "Curious adult who runs a self-hosted home lab, hikes and backpacks in the "
-    "Pacific Northwest, plays retro games, and is learning Telugu. Likes "
-    "explainers, engineering and how-things-work, science, history, travel, "
-    "food, and long-form craft. Has little patience for hype, drama or outrage."
+    "Curious adult in Seattle who runs a self-hosted home lab, hikes and "
+    "backpacks in the Pacific Northwest, travels, plays retro games, speaks "
+    "Spanish, is learning Telugu (Mandarin next) and enjoys a taste of any "
+    "language. Likes explainers, engineering and how-things-work, science, "
+    "history, geography, travel, food and long-form craft. Has little "
+    "patience for hype, drama or outrage."
 )
+
+DEFAULT_INTERESTS = (
+    "self-hosting|computer networking|Pacific Northwest geology|backpacking"
+    "|history of video games|linguistics|Telugu language|Mandarin Chinese"
+)
+
+# "Name:wikipedia-code" pairs.
+DEFAULT_LEARNING = "Telugu:te|Mandarin:zh"
+DEFAULT_CURIOUS = (
+    "French:fr|Korean:ko|Cantonese:yue|Japanese:ja|Russian:ru|Ukrainian:uk"
+    "|Hindi:hi|Indonesian:id|Tagalog:tl"
+)
+DEFAULT_FLUENT = "Spanish:es"
 
 
 def parse_weights(raw: str) -> dict[str, int]:
@@ -71,6 +87,23 @@ def parse_weights(raw: str) -> dict[str, int]:
 
 def parse_list(raw: str) -> list[str]:
     return [p.strip() for p in raw.split("|") if p.strip()]
+
+
+def parse_langs(raw: str) -> list[tuple[str, str]]:
+    out = []
+    for item in parse_list(raw):
+        name, _, code = item.partition(":")
+        if name.strip():
+            out.append((name.strip(), code.strip()))
+    return out
+
+
+def parse_coords(raw: str) -> tuple[float, float] | None:
+    try:
+        lat, lon = (float(x) for x in raw.split(","))
+        return lat, lon
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -93,6 +126,9 @@ class Settings:
     weights: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_WEIGHTS))
 
     wikipedia_lang: str = "en"
+    home_name: str = "Seattle"
+    home_coords: tuple[float, float] | None = (47.6062, -122.3321)
+    wiki_interests: list[str] = field(default_factory=lambda: parse_list(DEFAULT_INTERESTS))
 
     jellyfin: Service = field(default_factory=Service)
     jellyfin_token: str = ""
@@ -108,31 +144,43 @@ class Settings:
     romm_username: str = ""
     romm_password: str = ""
     romm_token: str = ""
+    # Argosy (RomM's Android launcher) starts a game from argosy://launch?romm_id=N
+    argosy: bool = True
 
     invidious: Service = field(default_factory=Service)
     invidious_topics: list[str] = field(default_factory=list)
+    # Where "Open" goes for a YouTube video: "youtube" (the app) or "invidious".
+    video_link: str = "youtube"
+    nebula_feeds: list[str] = field(default_factory=list)
+
+    travel: Service = field(default_factory=Service)
+    travel_token: str = ""
 
     data_dir: str = "/data"
 
     llm_url: str = ""
     llm_key: str = ""
     llm_model: str = "fast-haiku"
-    curator_profile: str = ""
+    curator_profile: str = DEFAULT_PROFILE
     curator_channels: list[str] = field(default_factory=list)
     language_channels: list[str] = field(default_factory=list)
     curator_share: float = 0.8
     curator_picks: int = 15
     curator_min_score: int = 7
     curate_every_hours: float = 12
+    # Send photo thumbnails to the model so captions describe the actual picture.
+    curator_vision: bool = True
 
     news_feeds: list[str] = field(default_factory=list)
     news_max_age_hours: float = 72
     lingopie_url: str = ""
 
-    language_name: str = "Telugu"
-    language_wikipedia: str = "te"
+    # Languages being learned (first = current), ones you'd like a taste of,
+    # and ones you already speak (their content counts as ordinary content).
+    languages_learning: list[tuple[str, str]] = field(default_factory=lambda: parse_langs(DEFAULT_LEARNING))
+    languages_curious: list[tuple[str, str]] = field(default_factory=lambda: parse_langs(DEFAULT_CURIOUS))
+    languages_fluent: list[tuple[str, str]] = field(default_factory=lambda: parse_langs(DEFAULT_FLUENT))
     language_practice_url: str = ""
-    language_video_queries: list[str] = field(default_factory=list)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -144,6 +192,9 @@ class Settings:
             user_agent=_env("LIESSURE_USER_AGENT", cls.user_agent),
             weights=parse_weights(_env("LIESSURE_WEIGHTS")),
             wikipedia_lang=_env("WIKIPEDIA_LANG", "en"),
+            home_name=_env("HOME_NAME", "Seattle"),
+            home_coords=parse_coords(_env("HOME_COORDS", "47.6062,-122.3321")),
+            wiki_interests=parse_list(_env("WIKI_INTERESTS", DEFAULT_INTERESTS)),
             jellyfin=svc("JELLYFIN"),
             jellyfin_token=_env("JELLYFIN_TOKEN"),
             jellyfin_user_id=_env("JELLYFIN_USER_ID"),
@@ -155,14 +206,19 @@ class Settings:
             romm_username=_env("ROMM_USERNAME"),
             romm_password=_env("ROMM_PASSWORD"),
             romm_token=_env("ROMM_TOKEN"),
+            argosy=_env("ARGOSY", "1") not in ("0", "false", "no"),
             invidious=svc("INVIDIOUS"),
             invidious_topics=parse_list(
                 _env(
                     "INVIDIOUS_TOPICS",
                     "documentary|how it's made|science explained|history explained"
-                    "|cooking|hiking|retro games|music live session",
+                    "|cooking|hiking|retro games|music live session|documental",
                 )
             ),
+            video_link=_env("VIDEO_LINK", "youtube"),
+            nebula_feeds=parse_list(_env("NEBULA_FEEDS", "https://rss.nebula.app/video.rss")),
+            travel=svc("TRAVEL"),
+            travel_token=_env("TRAVEL_TOKEN"),
             data_dir=_env("DATA_DIR", "/data"),
             llm_url=_strip(_env("LLM_URL")),
             llm_key=_env("LLM_KEY"),
@@ -170,21 +226,26 @@ class Settings:
             curator_profile=_env("CURATOR_PROFILE", DEFAULT_PROFILE),
             curator_channels=parse_list(_env("CURATOR_CHANNELS")),
             language_channels=parse_list(_env("LANGUAGE_CHANNELS")),
-            curator_share=float(_env("CURATOR_SHARE", "0.8") or 0.8),
-            curator_picks=int(_env("CURATOR_PICKS", "15") or 15),
-            curator_min_score=int(_env("CURATOR_MIN_SCORE", "7") or 7),
-            curate_every_hours=float(_env("CURATE_EVERY_HOURS", "12") or 12),
+            curator_share=float(_env("CURATOR_SHARE", "0.8")),
+            curator_picks=int(_env("CURATOR_PICKS", "15")),
+            curator_min_score=int(_env("CURATOR_MIN_SCORE", "7")),
+            curate_every_hours=float(_env("CURATE_EVERY_HOURS", "12")),
+            curator_vision=_env("CURATOR_VISION", "1") not in ("0", "false", "no"),
             news_feeds=parse_list(_env("NEWS_FEEDS", DEFAULT_NEWS_FEEDS)),
-            news_max_age_hours=float(_env("NEWS_MAX_AGE_HOURS", "72") or 72),
+            news_max_age_hours=float(_env("NEWS_MAX_AGE_HOURS", "72")),
             lingopie_url=_strip(_env("LINGOPIE_URL")),
-            language_name=_env("LANGUAGE_NAME", "Telugu"),
-            language_wikipedia=_env("LANGUAGE_WIKIPEDIA", "te"),
+            languages_learning=parse_langs(_env("LANGUAGES_LEARNING", DEFAULT_LEARNING)),
+            languages_curious=parse_langs(_env("LANGUAGES_CURIOUS", DEFAULT_CURIOUS)),
+            languages_fluent=parse_langs(_env("LANGUAGES_FLUENT", DEFAULT_FLUENT)),
             language_practice_url=_strip(_env("LANGUAGE_PRACTICE_URL")),
-            language_video_queries=parse_list(
-                _env(
-                    "LANGUAGE_VIDEO_QUERIES",
-                    "learn telugu|telugu conversation practice|telugu for beginners"
-                    "|telugu short film",
-                )
-            ),
         )
+
+
+def language_queries(name: str) -> list[str]:
+    """Invidious searches for a language being learned."""
+    return [
+        f"learn {name} for beginners",
+        f"{name} conversation practice",
+        f"{name} comprehensible input",
+        f"{name} listening practice slow",
+    ]

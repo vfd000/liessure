@@ -25,7 +25,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
-from .config import Settings
+from .config import Settings, language_queries
 
 
 log = logging.getLogger("liessure.sources")
@@ -220,6 +220,7 @@ async def _jellyfin_video(
         image=_jellyfin_image(s, item["Id"]) if (item.get("ImageTags") or {}).get("Primary") else "",
         url=_jellyfin_link(s, item),
         embed=_trailer_embed(s, item),
+        ref=item["Id"],
     )
 
 
@@ -299,6 +300,7 @@ def _immich_card(s: Settings, asset: dict[str, Any], subtitle: str) -> Card:
         blurb=_clip(exif.get("description")),
         image=proxied(f"{s.immich.url}/api/assets/{asset['id']}/thumbnail?size=preview"),
         url=f"{s.immich.link_base}/photos/{asset['id']}",
+        ref=asset["id"],
     )
 
 
@@ -375,8 +377,20 @@ async def game(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
     items, _ = _romm_page(r.json())
     if not items:
         raise Unavailable("romm page was empty")
-    rom = items[0]
+    return game_card(s, items[0])
 
+
+async def romm_page(client: httpx.AsyncClient, s: Settings, limit: int, offset: int) -> tuple[list[dict[str, Any]], int | None]:
+    r = await client.get(f"{s.romm.url}/api/roms", params={"limit": limit, "offset": offset}, headers=_romm_headers(s))
+    r.raise_for_status()
+    return _romm_page(r.json())
+
+
+def rom_platform(rom: dict[str, Any]) -> str:
+    return rom.get("platform_display_name") or rom.get("platform_name") or rom.get("platform_slug") or ""
+
+
+def game_card(s: Settings, rom: dict[str, Any]) -> Card:
     cover = rom.get("path_cover_large") or rom.get("path_cover_l") or rom.get("path_cover_small") or ""
     if cover:
         cover = cover.lstrip("/")
@@ -386,23 +400,29 @@ async def game(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
     else:
         image = rom.get("url_cover") or ""
 
-    platform = rom.get("platform_display_name") or rom.get("platform_name") or rom.get("platform_slug") or ""
     link = f"{s.romm.link_base}/rom/{rom['id']}"
+    actions = []
+    if s.argosy:
+        # Android only: Argosy (RomM's launcher) downloads if needed and starts the game.
+        actions.append({"label": "Play in Argosy", "url": f"argosy://launch?romm_id={rom['id']}", "android": "1"})
+    actions.append({"label": "Play in browser", "url": f"{link}/ejs"})
     return Card(
         kind="game",
         label="Game on RomM",
         title=rom.get("name") or rom.get("fs_name_no_ext") or "A game",
-        subtitle=platform,
+        subtitle=rom_platform(rom),
         blurb=_clip(rom.get("summary")),
         image=image,
         url=link,
-        actions=[{"label": "Play in browser", "url": f"{link}/ejs"}],
+        actions=actions,
+        ref=str(rom["id"]),
     )
 
 
 # ---------------------------------------------------------------- invidious
 
 _inv_cache = _TTLCache(3600)
+_nebula_cache = _TTLCache(3600)
 
 
 async def _invidious_search(client: httpx.AsyncClient, s: Settings, query: str, page: int) -> list[dict[str, Any]]:
@@ -431,6 +451,44 @@ def _duration(sec: int) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+def video_urls(s: Settings, vid: str) -> tuple[str, dict[str, str]]:
+    """(primary url, secondary action) for a YouTube id, per VIDEO_LINK."""
+    yt = f"https://www.youtube.com/watch?v={quote(vid)}"
+    inv = f"{s.invidious.link_base}/watch?v={quote(vid)}"
+    if s.video_link == "invidious" and s.invidious.link_base:
+        return inv, {"label": "YouTube", "url": yt}
+    return yt, {"label": "Invidious", "url": inv}
+
+
+def nebula_card(item: dict[str, Any]) -> Card:
+    return Card(
+        kind="video",
+        label="Nebula",
+        title=item["title"],
+        subtitle=item.get("author") or item.get("source") or "",
+        blurb=_clip(item.get("summary"), 240),
+        image=item.get("image") or "",
+        url=item["url"],
+        ref="nebula:" + hashlib.sha1(item["url"].encode()).hexdigest()[:16],
+    )
+
+
+async def nebula_items(client: httpx.AsyncClient, s: Settings) -> list[dict[str, Any]]:
+    hit = _nebula_cache.get("all")
+    if hit is not None:
+        return hit
+    items: list[dict[str, Any]] = []
+    for url in s.nebula_feeds:
+        try:
+            r = await client.get(url)
+            r.raise_for_status()
+            items += parse_feed(r.content)
+        except (httpx.HTTPError, ElementTree.ParseError) as e:
+            log.warning("nebula feed %s failed: %s", url, e)
+    _nebula_cache.put("all", items)
+    return items
+
+
 def _video_card(s: Settings, v: dict[str, Any], kind: str, label: str) -> Card:
     vid = v["videoId"]
     bits = [v.get("author") or ""]
@@ -443,7 +501,8 @@ def _video_card(s: Settings, v: dict[str, Any], kind: str, label: str) -> Card:
         subtitle=" · ".join(b for b in bits if b),
         blurb=_clip(v.get("description"), 240),
         image=proxied(f"{s.invidious.url}/vi/{quote(vid)}/mqdefault.jpg"),
-        url=f"{s.invidious.link_base}/watch?v={quote(vid)}",
+        url=video_urls(s, vid)[0],
+        actions=[video_urls(s, vid)[1]],
         embed={"type": "video", "label": "Play here", "src": f"{s.invidious.link_base}/embed/{quote(vid)}?autoplay=1"},
         ref=vid,
     )
@@ -461,6 +520,10 @@ async def _random_video(client: httpx.AsyncClient, s: Settings, rng: random.Rand
 
 
 async def video(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    if s.nebula_feeds and (not s.invidious.url or rng.random() < 0.25):
+        items = await nebula_items(client, s)
+        if items:
+            return nebula_card(rng.choice(items))
     v = await _random_video(client, s, rng, s.invidious_topics)
     return _video_card(s, v, "video", "Video")
 
@@ -473,6 +536,7 @@ NS = {
     "atom": "http://www.w3.org/2005/Atom",
     "media": "http://search.yahoo.com/mrss/",
     "content": "http://purl.org/rss/1.0/modules/content/",
+    "dc": "http://purl.org/dc/elements/1.1/",
 }
 
 
@@ -523,8 +587,9 @@ def parse_feed(body: bytes) -> list[dict[str, Any]]:
         enc = it.find("enclosure")
         if not image and enc is not None and (enc.get("type") or "").startswith("image/"):
             image = enc.get("url") or ""
+        author = _text(it.find("dc:creator", NS)) or _text(it.find("author"))
         out.append({
-            "title": _text(it.find("title")), "url": _text(it.find("link")),
+            "title": _text(it.find("title")), "url": _text(it.find("link")), "author": author,
             "summary": _text(it.find("description")), "source": source, "image": image,
             "ts": _when(_text(it.find("pubDate"))),
         })
@@ -575,20 +640,35 @@ async def news(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
 # ----------------------------------------------------------------- language
 
 
-def _resources(s: Settings) -> list[tuple[str, str, str]]:
-    if s.language_name.lower() != "telugu":
-        return []
-    return [
+RESOURCES: dict[str, list[tuple[str, str, str]]] = {
+    "te": [
         ("Andhra Bharati dictionaries", "Look up a word you half-remember.", "https://www.andhrabharati.com/dictionary/"),
         ("Telugu on Wiktionary", "Browse Telugu words with script, transliteration and usage.", "https://en.wiktionary.org/wiki/Category:Telugu_lemmas"),
         ("Telugu sentences on Tatoeba", "Read a few real sentences and their translations.", "https://tatoeba.org/en/sentences/show_all_in/tel/none"),
         ("Forvo: Telugu pronunciation", "Hear native speakers say everyday words.", "https://forvo.com/languages/te/"),
         ("Telugu script on Omniglot", "Refresh the vowels, consonants and vowel signs.", "https://www.omniglot.com/writing/telugu.htm"),
-    ]
+    ],
+    "zh": [
+        ("MDBG Chinese dictionary", "Look up a character: pinyin, tones, stroke order.", "https://www.mdbg.net/chinese/dictionary"),
+        ("Mandarin on Wiktionary", "Browse Mandarin words with pinyin and usage.", "https://en.wiktionary.org/wiki/Category:Mandarin_lemmas"),
+        ("Mandarin sentences on Tatoeba", "Read a few real sentences and their translations.", "https://tatoeba.org/en/sentences/show_all_in/cmn/none"),
+        ("Forvo: Mandarin pronunciation", "Hear native speakers, tones and all.", "https://forvo.com/languages/zh/"),
+        ("Chinese script on Omniglot", "How the writing system works, in one page.", "https://www.omniglot.com/chinese/"),
+    ],
+}
+
+
+def learning_language(s: Settings, rng: random.Random) -> tuple[str, str]:
+    """The current language (first) twice as often as each later one."""
+    langs = s.languages_learning
+    weights = [2] + [1] * (len(langs) - 1)
+    return rng.choices(langs, weights=weights)[0]
 
 
 async def language(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
-    lang = s.language_name
+    if not s.languages_learning:
+        raise Unavailable("no languages configured")
+    lang, code = learning_language(s, rng)
     options: list[Callable[[], Awaitable[Card]]] = []
 
     if s.language_practice_url:
@@ -603,17 +683,16 @@ async def language(client: httpx.AsyncClient, s: Settings, rng: random.Random) -
             )
         options += [drill, drill]  # the drill is the best use of the minute; weight it
 
-    if s.language_wikipedia:
+    if code:
         async def wiki() -> Card:
-            data = await _wiki_random(client, s.language_wikipedia)
-            card = _wiki_card(data, "language", f"{lang} Wikipedia")
+            card = _wiki_card(await _wiki_random(client, code), "language", f"{lang} Wikipedia")
             card.subtitle = card.subtitle or "Read the first sentence out loud"
             return card
         options.append(wiki)
 
-    if s.invidious.url and s.language_video_queries:
+    if s.invidious.url:
         async def vid() -> Card:
-            v = await _random_video(client, s, rng, s.language_video_queries)
+            v = await _random_video(client, s, rng, language_queries(lang))
             return _video_card(s, v, "language", f"{lang} video")
         options.append(vid)
 
@@ -626,15 +705,12 @@ async def language(client: httpx.AsyncClient, s: Settings, rng: random.Random) -
             )
         options.append(lingopie)
 
-    resources = _resources(s)
-    if resources:
+    if RESOURCES.get(code):
         async def resource() -> Card:
-            title, blurb, url = rng.choice(resources)
+            title, blurb, url = rng.choice(RESOURCES[code])
             return Card(kind="language", label=f"{lang} resource", title=title, blurb=blurb, url=url)
         options.append(resource)
 
-    if not options:
-        raise Unavailable("no language sources")
     rng.shuffle(options)
     last: Exception | None = None
     for opt in options[:2]:
@@ -664,14 +740,11 @@ def configured(s: Settings) -> dict[str, bool]:
     return {
         "wikipedia": True,
         "game": bool(s.romm.url and (s.romm_token or s.romm_username)),
-        "video": bool(s.invidious.url and s.invidious_topics),
+        "video": bool((s.invidious.url and s.invidious_topics) or s.nebula_feeds),
         "movie": bool(s.jellyfin.url and s.jellyfin_token),
         "show": bool(s.jellyfin.url and s.jellyfin_token),
         "song": bool(s.jellyfin.url and s.jellyfin_token),
         "photo": bool(s.immich.url and s.immich_api_key),
         "news": bool(s.news_feeds),
-        "language": bool(
-            s.lingopie_url or s.language_practice_url or s.language_wikipedia or _resources(s)
-            or (s.invidious.url and s.language_video_queries)
-        ),
+        "language": bool(s.languages_learning),
     }

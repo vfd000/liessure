@@ -42,10 +42,19 @@ jobs:
       NEWS_MAX_AGE_HOURS: ${{ vars.NEWS_MAX_AGE_HOURS }}
       LINGOPIE_URL: ${{ vars.LINGOPIE_URL }}
       LANGUAGE_CHANNELS: ${{ vars.LANGUAGE_CHANNELS }}
-      LANGUAGE_NAME: ${{ vars.LANGUAGE_NAME }}
-      LANGUAGE_WIKIPEDIA: ${{ vars.LANGUAGE_WIKIPEDIA }}
+      HOME_NAME: ${{ vars.HOME_NAME }}
+      HOME_COORDS: ${{ vars.HOME_COORDS }}
+      WIKI_INTERESTS: ${{ vars.WIKI_INTERESTS }}
+      ARGOSY: ${{ vars.ARGOSY }}
+      VIDEO_LINK: ${{ vars.VIDEO_LINK }}
+      NEBULA_FEEDS: ${{ vars.NEBULA_FEEDS }}
+      TRAVEL_URL: ${{ vars.TRAVEL_URL }}
+      CURATOR_VISION: ${{ vars.CURATOR_VISION }}
+      LANGUAGES_LEARNING: ${{ vars.LANGUAGES_LEARNING }}
+      LANGUAGES_CURIOUS: ${{ vars.LANGUAGES_CURIOUS }}
+      LANGUAGES_FLUENT: ${{ vars.LANGUAGES_FLUENT }}
+      TRAVEL_TOKEN: ${{ secrets.TRAVEL_TOKEN }}
       LANGUAGE_PRACTICE_URL: ${{ vars.LANGUAGE_PRACTICE_URL }}
-      LANGUAGE_VIDEO_QUERIES: ${{ vars.LANGUAGE_VIDEO_QUERIES }}
     steps:
       - uses: actions/checkout@v4
 
