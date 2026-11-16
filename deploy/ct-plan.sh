@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CHANGES
-#   wtr: picks the next free guest id (pvesh get /cluster/nextid; refuses one >= 200 or with a guests/<id>.yml)
+#   wtr: picks the first guest id from 163 to 199 with no CT, no VM, no guests/<id>.yml and no <id>.fw
 #   wtr: writes /etc/pve/firewall/<id>.fw BEFORE the CT exists: TCP 8000 from NPM 10.11.14.18 only, dropped otherwise
 #   wtr: creates CT <id> 'liessure' (Debian 13 template from storage local, unprivileged, nesting=1,keyctl=1,
 #        2 cores, 1024 MB, 512 MB swap, 8 GB on nvme, vmbr0 VLAN tag 2, DHCP, firewall=1, onboot, tag liessure,
@@ -56,10 +56,17 @@ TEMPLATE="$(wtr "sudo pveam list local" | awk '/debian-13-standard_.*_amd64/{pri
 wtr "sudo pvesm status" | awk '{print $1}' | grep -qx nvme || { echo "ABORT: no storage named nvme" >&2; exit 1; }
 wtr "sudo pct exec 106 -- grep -q '^MCP_API_TOKEN=.' /opt/household-graph/.env" || { echo "ABORT: no MCP_API_TOKEN in ct 106" >&2; exit 1; }
 wtr "sudo pct exec 153 -- test -s /etc/travel/MCP_API_TOKEN" || { echo "ABORT: no travel token in ct 153" >&2; exit 1; }
-CAND="$(wtr "sudo pvesh get /cluster/nextid")"
-[[ "$CAND" =~ ^[0-9]+$ && "$CAND" -lt 200 ]] || { echo "ABORT: next free id '$CAND' is not below 200" >&2; exit 1; }
-! wtr "test -e /opt/bb-ansible/wtr/guests/$CAND.yml" || { echo "ABORT: guests/$CAND.yml exists (reserved)" >&2; exit 1; }
-! wtr "test -e /etc/pve/firewall/$CAND.fw" || { echo "ABORT: /etc/pve/firewall/$CAND.fw already exists" >&2; exit 1; }
+# Proxmox's own nextid offers gaps (105) that wtr's ansible has reserved, so
+# pick past the last defined guest instead.
+CAND=""
+for c in $(seq 163 199); do
+  wtr "sudo pct status $c" >/dev/null 2>&1 && continue
+  wtr "sudo qm status $c" >/dev/null 2>&1 && continue
+  wtr "test -e /opt/bb-ansible/wtr/guests/$c.yml" && continue
+  wtr "test -e /etc/pve/firewall/$c.fw" && continue
+  CAND="$c"; break
+done
+[[ -n "$CAND" ]] || { echo "ABORT: no free guest id between 163 and 199" >&2; exit 1; }
 say "    ok: id $CAND, template $TEMPLATE"
 ID="$CAND"
 
