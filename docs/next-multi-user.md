@@ -58,3 +58,15 @@ approvals.liess.tv/d/<id>), "done" (the session's own summary). Reading
 fleet state needs an endpoint on the agent box, or the box pushing a small
 JSON to Liessure; never the box's credentials in Liessure. Answers stay in
 the console: a card links, it doesn't act.
+
+## Later: to-do cards
+
+Cards for open items on axl's to-do list (the household `lists` service,
+lists.liess.tv; `lists_oauth` through Concierge), so a spare minute in the
+feed can go to something he actually wants done. Each card: the item, an
+LLM estimate of how long it takes ("5 min", "an evening") with the
+assumption behind it, and links that get it started (the doc, the store
+page, the PR, the household graph entry it mentions). Favour items that fit
+the moment: short ones on the phone, longer ones in the evening. Ticking it
+off stays in the lists app; the card links, it doesn't act. Estimates are
+cached per item and redone only when the item's text changes.
