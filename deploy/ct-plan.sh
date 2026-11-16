@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # CHANGES
+#   wtr: read-only preflight, aborting before any change if it fails: no CT named liessure (pct list); a
+#        debian-13-standard template on local (pveam list); a storage named nvme (pvesm status); ct 106 has
+#        an MCP_API_TOKEN line and ct 153 a non-empty token file (existence only, no value read)
 #   wtr: picks the first guest id from 163 to 199 with no CT, no VM, no guests/<id>.yml and no <id>.fw
 #   wtr: writes /etc/pve/firewall/<id>.fw BEFORE the CT exists: TCP 8000 from NPM 10.11.14.18 only, dropped otherwise
 #   wtr: creates CT <id> 'liessure' (Debian 13 template from storage local, unprivileged, nesting=1,keyctl=1,
@@ -14,6 +17,8 @@
 #            TRAVEL_TOKEN from ct 153's /etc/travel/MCP_API_TOKEN, piped through wtr, never printed or stored there
 #   ct 106: reads one line of /opt/household-graph/.env (nothing written)
 #   ct 153: reads /etc/travel/MCP_API_TOKEN (nothing written)
+#   ct <id>: read-only checks after: one GRAPH_TOKEN and one TRAVEL_TOKEN line, .env is 600 runner,
+#            and its IP (hostname -I) for the final message
 #   Installs no app code and starts no app: the runner deploys Liessure once registered.
 #   Rollback on any failure after the CT is created: pct stop + destroy <id>, rm <id>.fw.
 # END CHANGES
