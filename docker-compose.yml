@@ -1,0 +1,32 @@
+# Deployed to /opt/detour by .github/workflows/deploy.yml (self-hosted runner
+# on the service's own LXC). Secrets come in as env vars from GitHub Actions
+# secrets; nothing is written to disk. Every source is optional.
+services:
+  detour:
+    build: .
+    image: detour:local
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DETOUR_WEIGHTS: ${DETOUR_WEIGHTS:-}
+      WIKIPEDIA_LANG: ${WIKIPEDIA_LANG:-en}
+      JELLYFIN_URL: ${JELLYFIN_URL:-}
+      JELLYFIN_PUBLIC_URL: ${JELLYFIN_PUBLIC_URL:-}
+      JELLYFIN_TOKEN: ${JELLYFIN_TOKEN:-}
+      JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:-}
+      IMMICH_URL: ${IMMICH_URL:-}
+      IMMICH_PUBLIC_URL: ${IMMICH_PUBLIC_URL:-}
+      IMMICH_API_KEY: ${IMMICH_API_KEY:-}
+      ROMM_URL: ${ROMM_URL:-}
+      ROMM_PUBLIC_URL: ${ROMM_PUBLIC_URL:-}
+      ROMM_TOKEN: ${ROMM_TOKEN:-}
+      ROMM_USERNAME: ${ROMM_USERNAME:-}
+      ROMM_PASSWORD: ${ROMM_PASSWORD:-}
+      INVIDIOUS_URL: ${INVIDIOUS_URL:-}
+      INVIDIOUS_PUBLIC_URL: ${INVIDIOUS_PUBLIC_URL:-}
+      INVIDIOUS_TOPICS: ${INVIDIOUS_TOPICS:-}
+      LANGUAGE_NAME: ${LANGUAGE_NAME:-Telugu}
+      LANGUAGE_WIKIPEDIA: ${LANGUAGE_WIKIPEDIA:-te}
+      LANGUAGE_PRACTICE_URL: ${LANGUAGE_PRACTICE_URL:-}
+      LANGUAGE_VIDEO_QUERIES: ${LANGUAGE_VIDEO_QUERIES:-}

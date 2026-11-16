@@ -1,0 +1,66 @@
+name: deploy
+# Runs on the runner installed on Detour's own LXC. Never add pull_request here.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["android/**", "**.md"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: [self-hosted, detour-r7]
+    env:
+      DETOUR_WEIGHTS: ${{ vars.DETOUR_WEIGHTS }}
+      WIKIPEDIA_LANG: ${{ vars.WIKIPEDIA_LANG }}
+      JELLYFIN_URL: ${{ vars.JELLYFIN_URL }}
+      JELLYFIN_PUBLIC_URL: ${{ vars.JELLYFIN_PUBLIC_URL }}
+      JELLYFIN_TOKEN: ${{ secrets.JELLYFIN_TOKEN }}
+      JELLYFIN_USER_ID: ${{ vars.JELLYFIN_USER_ID }}
+      IMMICH_URL: ${{ vars.IMMICH_URL }}
+      IMMICH_PUBLIC_URL: ${{ vars.IMMICH_PUBLIC_URL }}
+      IMMICH_API_KEY: ${{ secrets.IMMICH_API_KEY }}
+      ROMM_URL: ${{ vars.ROMM_URL }}
+      ROMM_PUBLIC_URL: ${{ vars.ROMM_PUBLIC_URL }}
+      ROMM_TOKEN: ${{ secrets.ROMM_TOKEN }}
+      ROMM_USERNAME: ${{ vars.ROMM_USERNAME }}
+      ROMM_PASSWORD: ${{ secrets.ROMM_PASSWORD }}
+      INVIDIOUS_URL: ${{ vars.INVIDIOUS_URL }}
+      INVIDIOUS_PUBLIC_URL: ${{ vars.INVIDIOUS_PUBLIC_URL }}
+      INVIDIOUS_TOPICS: ${{ vars.INVIDIOUS_TOPICS }}
+      LANGUAGE_NAME: ${{ vars.LANGUAGE_NAME }}
+      LANGUAGE_WIKIPEDIA: ${{ vars.LANGUAGE_WIKIPEDIA }}
+      LANGUAGE_PRACTICE_URL: ${{ vars.LANGUAGE_PRACTICE_URL }}
+      LANGUAGE_VIDEO_QUERIES: ${{ vars.LANGUAGE_VIDEO_QUERIES }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight
+        # Every source is optional, so nothing is fatal; say what's missing.
+        run: |
+          [ -n "$JELLYFIN_URL" ] && [ -z "$JELLYFIN_TOKEN" ] && echo "::warning::JELLYFIN_URL set but JELLYFIN_TOKEN empty"
+          [ -n "$IMMICH_URL" ] && [ -z "$IMMICH_API_KEY" ] && echo "::warning::IMMICH_URL set but IMMICH_API_KEY empty"
+          [ -n "$ROMM_URL" ] && [ -z "$ROMM_TOKEN$ROMM_PASSWORD" ] && echo "::warning::ROMM_URL set but no RomM credential"
+          true
+
+      - name: Sync to /opt/detour
+        run: rsync -a --delete --exclude .git --exclude android ./ /opt/detour/
+
+      - name: Build and start
+        working-directory: /opt/detour
+        run: docker compose up -d --build --remove-orphans
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8000/healthz && exit 0
+            sleep 2
+          done
+          docker compose -f /opt/detour/docker-compose.yml logs --tail 50
+          exit 1
+
+      - name: Prune
+        run: docker image prune -f

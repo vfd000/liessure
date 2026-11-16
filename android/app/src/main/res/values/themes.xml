@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="detour_bg">#14161A</color>
+    <color name="detour_accent">#2F6F5E</color>
+    <style name="Theme.Detour" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/detour_bg</item>
+        <item name="android:statusBarColor">@color/detour_bg</item>
+        <item name="android:navigationBarColor">@color/detour_bg</item>
+    </style>
+</resources>

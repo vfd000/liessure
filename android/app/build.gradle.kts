@@ -1,0 +1,51 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+val detourUrl: String = providers.gradleProperty("detourUrl").get()
+
+// Release signing comes from CI secrets when present (so installs can be
+// updated in place); otherwise the build falls back to the debug key.
+val keystorePath: String? = System.getenv("DETOUR_KEYSTORE_PATH")
+
+android {
+    namespace = "tv.liess.detour"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "tv.liess.detour"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
+        versionName = "0.1.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
+        buildConfigField("String", "DETOUR_URL", "\"$detourUrl\"")
+    }
+
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("DETOUR_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("DETOUR_KEY_ALIAS")
+                keyPassword = System.getenv("DETOUR_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfig = if (keystorePath != null) signingConfigs.getByName("release")
+                            else signingConfigs.getByName("debug")
+        }
+    }
+
+    buildFeatures { buildConfig = true }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+}
