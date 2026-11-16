@@ -1,5 +1,6 @@
 import json
 import random
+import re
 
 import httpx
 import pytest
@@ -15,6 +16,19 @@ JF = "http://jf.test"
 IM = "http://im.test"
 RM = "http://romm.test"
 INV = "http://inv.test"
+
+
+RSS = """<?xml version="1.0"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel>
+<title>Test Wire</title>
+<item><title>Bridge reopens</title><link>https://news.example/bridge</link>
+<description>&lt;p&gt;The &lt;b&gt;bridge&lt;/b&gt; reopened.&lt;/p&gt;</description>
+<pubDate>Mon, 16 Nov 2099 10:00:00 GMT</pubDate><media:content url="https://news.example/b.jpg"/></item>
+<item><title>Old story</title><link>https://news.example/old</link><pubDate>Mon, 01 Jan 2001 10:00:00 GMT</pubDate></item>
+</channel></rss>"""
+
+ATOM = """<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><title>Atom Daily</title>
+<entry><title>Comet seen</title><link rel="alternate" href="https://atom.example/comet"/>
+<summary>Bright one.</summary><updated>2099-11-16T09:00:00Z</updated></entry></feed>"""
 
 
 async def _agen(data):
@@ -61,6 +75,10 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
             {"type": "video", "videoId": "short1", "title": "short", "lengthSeconds": 30},
             {"type": "video", "videoId": "long1", "title": "A long one", "author": "Ch", "lengthSeconds": 900},
         ])
+    if host == "news.test" and path == "/rss":
+        return httpx.Response(200, content=RSS.encode(), headers={"content-type": "application/rss+xml"})
+    if host == "news.test" and path == "/atom":
+        return httpx.Response(200, content=ATOM.encode(), headers={"content-type": "application/atom+xml"})
     return httpx.Response(404, text=f"unexpected {url}")
 
 
@@ -71,6 +89,7 @@ def full_settings() -> Settings:
         romm=Service(RM, "https://games.example"), romm_token="rt",
         invidious=Service(INV, "https://watch.example"), invidious_topics=["docs"],
         language_practice_url="https://practice.example", language_video_queries=["learn telugu"],
+        news_feeds=["http://news.test/rss", "http://news.test/atom"],
     )
 
 
@@ -160,32 +179,52 @@ def test_audio_stream_proxy(client):
     assert client.get("/stream/audio/..%2Fetc").status_code == 404
 
 
+
+
+def test_news_feed_parsing(client):
+    from app import sources as src
+    items = src.parse_feed(RSS.encode()) + src.parse_feed(ATOM.encode())
+    assert [i["title"] for i in items] == ["Bridge reopens", "Old story", "Comet seen"]
+    assert items[0]["summary"] == "The  bridge  reopened." or "bridge" in items[0]["summary"]
+    assert items[0]["image"] == "https://news.example/b.jpg" and items[2]["source"] == "Atom Daily"
+    titles = {client.get("/api/card/news").json()["title"] for _ in range(20)}
+    assert titles == {"Bridge reopens", "Comet seen"}  # the 2001 item is too old
+
+
 # ------------------------------------------------------------------ curator
 
 def curator_backend(calls):
+    """Fake services plus a fake gateway that scores the first candidate 9, the second 2,
+    and invents an id that was never offered."""
     def handler(request: httpx.Request) -> httpx.Response:
-        path = request.url.path
-        if path == "/api/v1/search":
+        host, path = request.url.host, request.url.path
+        if host == "inv.test" and path == "/api/v1/search":
             return httpx.Response(200, json=[
                 {"type": "video", "videoId": "goodvideo01", "title": "How bridges stand up", "author": "Eng", "lengthSeconds": 900},
                 {"type": "video", "videoId": "dramavideo1", "title": "YOU WON'T BELIEVE", "author": "X", "lengthSeconds": 600},
                 {"type": "video", "videoId": "shortvideo1", "title": "short", "author": "X", "lengthSeconds": 40},
             ])
-        if path.startswith("/api/v1/videos/"):
+        if host == "inv.test" and path.startswith("/api/v1/videos/"):
             return httpx.Response(200, json={"recommendedVideos": [
                 {"videoId": "relatedvid1", "title": "Suspension bridges", "author": "Eng", "lengthSeconds": 1200}]})
+        if host.endswith("wikipedia.org") and path == "/w/api.php":
+            gen = request.url.params["generator"]
+            pages = [{"ns": 0, "title": f"{gen} article {n}", "description": "d", "extract": "Long text. " * 40}
+                     for n in range(2)]
+            return httpx.Response(200, json={"query": {"pages": pages}})
+        if host == "jf.test" and (path == "/Items" or path.endswith("/Similar")):
+            return httpx.Response(200, json={"Items": [
+                {"Id": f"aaaa000{n}", "Name": f"Track {n}", "AlbumArtist": "Band", "Album": "LP"} for n in range(2)]})
         if path == "/v1/chat/completions":
             body = json.loads(request.content)
             calls.append(body)
             assert request.headers["authorization"] == "Bearer llmk"
-            content = json.dumps({"picks": [
-                {"id": "goodvideo01", "score": 9, "why": "Engineering you like, done well."},
-                {"id": "relatedvid1", "score": 8, "why": "Follows the bridge video you opened."},
-                {"id": "dramavideo1", "score": 2, "why": "nah"},
-                {"id": "notacandid1", "score": 10, "why": "injected"},
-            ]})
-            return httpx.Response(200, json={"choices": [{"message": {"content": "Sure:\n" + content}}]})
-        return httpx.Response(404)
+            ids = re.findall(r"^\[([^\]]+)\]", body["messages"][1]["content"], re.M)
+            picks = [{"id": ids[0], "score": 9, "why": "Worth it."}, {"id": "invented-id", "score": 10, "why": "x"}]
+            if len(ids) > 1:
+                picks.append({"id": ids[1], "score": 2, "why": "meh"})
+            return httpx.Response(200, json={"choices": [{"message": {"content": "Sure:\n" + json.dumps({"picks": picks})}}]})
+        return fake_backend(request)
     return handler
 
 
@@ -193,30 +232,37 @@ def test_curator_end_to_end():
     calls = []
     s = full_settings()
     s.llm_url, s.llm_key, s.invidious_topics = "http://llm.test", "llmk", ["bridges"]
+    s.curator_share = 1.0
     store = Store(":memory:")
     app = create_app(s, transport=httpx.MockTransport(curator_backend(calls)), store=store, run_curator=False)
     with TestClient(app) as c:
         assert c.post("/api/event", json={"kind": "video", "ref": "openedvid01", "action": "open",
                                           "title": "Bridges 101"}).status_code == 204
         stats = c.post("/api/curate").json()
-        assert stats == {"candidates": 3, "picked": 2}
-        prompt = calls[0]["messages"][1]["content"]
+        assert set(stats) == {"video", "language", "wikipedia", "song", "news"}, stats
+        assert all(v["picked"] == 1 for v in stats.values()), stats
+
+        video_prompt = next(x for x in calls if "These are videos" in x["messages"][1]["content"])
+        prompt = video_prompt["messages"][1]["content"]
         assert "Bridges 101" in prompt and "shortvideo1" not in prompt
-        assert calls[0]["model"] == "fast-haiku"
-        assert store.pool_size("video") == 2
+        assert prompt.index("[relatedvid1]") < prompt.index("[goodvideo01]")  # related first
+        assert all(x["model"] == "fast-haiku" for x in calls)
 
-        cards = [c.get("/api/card/video").json() for _ in range(30)]
-        picked = {x["ref"] for x in cards if x["label"] == "Picked for you"}
-        assert picked == {"goodvideo01", "relatedvid1"}  # low score and invented ids never enter the pool
-        assert any(x["blurb"] == "Engineering you like, done well." for x in cards)
+        for kind in stats:
+            card = c.get(f"/api/card/{kind}").json()
+            assert card["why"] == "Worth it.", (kind, card)
+            assert card["kind"] == kind and card["url"].startswith("https://")
 
-        # Second run: everything already scored, nothing to send.
-        assert c.post("/api/curate").json() == {"candidates": 0, "picked": 0}
-        assert len(calls) == 1
+        assert c.get("/api/sources").json()["curator"]["pools"]["video"] == 1
+        # Second run: everything already scored, nothing new to send for the stable sources.
+        again = c.post("/api/curate?kind=video").json()
+        assert again == {"video": {"candidates": 0, "picked": 0}}
+        assert c.post("/api/curate?kind=movie").status_code == 400
 
 
 def test_parse_picks_rejects_junk():
     assert curator.parse_picks("no json here", {"a"}) == []
+    assert curator.parse_picks("[1, 2]", {"a"}) == []
     got = curator.parse_picks('{"picks":[{"id":"a","score":"11","why":"x"},{"id":"b","score":5}]}', {"a"})
     assert got == [{"id": "a", "score": 10, "why": "x"}]
 

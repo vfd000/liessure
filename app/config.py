@@ -33,9 +33,18 @@ DEFAULT_WEIGHTS = {
     "song": 2,
     "photo": 3,
     "language": 3,
+    "news": 2,
 }
 
 KINDS = tuple(DEFAULT_WEIGHTS)
+
+DEFAULT_NEWS_FEEDS = (
+    "https://feeds.npr.org/1001/rss.xml"
+    "|https://feeds.bbci.co.uk/news/world/rss.xml"
+    "|https://www.theguardian.com/science/rss"
+    "|https://feeds.arstechnica.com/arstechnica/index"
+    "|https://hnrss.org/best"
+)
 
 DEFAULT_PROFILE = (
     "Curious adult who runs a self-hosted home lab, hikes and backpacks in the "
@@ -78,7 +87,7 @@ class Service:
 class Settings:
     @property
     def curator_enabled(self) -> bool:
-        return bool(self.llm_url and self.llm_key and self.invidious.url)
+        return bool(self.llm_url and self.llm_key)
 
     user_agent: str = "Liessure/0.1 (self-hosted; personal use)"
     weights: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_WEIGHTS))
@@ -110,9 +119,15 @@ class Settings:
     llm_model: str = "fast-haiku"
     curator_profile: str = ""
     curator_channels: list[str] = field(default_factory=list)
+    language_channels: list[str] = field(default_factory=list)
+    curator_share: float = 0.8
     curator_picks: int = 15
     curator_min_score: int = 7
     curate_every_hours: float = 12
+
+    news_feeds: list[str] = field(default_factory=list)
+    news_max_age_hours: float = 72
+    lingopie_url: str = ""
 
     language_name: str = "Telugu"
     language_wikipedia: str = "te"
@@ -154,9 +169,14 @@ class Settings:
             llm_model=_env("LLM_MODEL", "fast-haiku"),
             curator_profile=_env("CURATOR_PROFILE", DEFAULT_PROFILE),
             curator_channels=parse_list(_env("CURATOR_CHANNELS")),
+            language_channels=parse_list(_env("LANGUAGE_CHANNELS")),
+            curator_share=float(_env("CURATOR_SHARE", "0.8") or 0.8),
             curator_picks=int(_env("CURATOR_PICKS", "15") or 15),
             curator_min_score=int(_env("CURATOR_MIN_SCORE", "7") or 7),
             curate_every_hours=float(_env("CURATE_EVERY_HOURS", "12") or 12),
+            news_feeds=parse_list(_env("NEWS_FEEDS", DEFAULT_NEWS_FEEDS)),
+            news_max_age_hours=float(_env("NEWS_MAX_AGE_HOURS", "72") or 72),
+            lingopie_url=_strip(_env("LINGOPIE_URL")),
             language_name=_env("LANGUAGE_NAME", "Telugu"),
             language_wikipedia=_env("LANGUAGE_WIKIPEDIA", "te"),
             language_practice_url=_strip(_env("LANGUAGE_PRACTICE_URL")),

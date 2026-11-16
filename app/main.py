@@ -50,7 +50,6 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     store = store or Store(f"{settings.data_dir}/liessure.db")
-    sources.STORE = store
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -75,6 +74,11 @@ def create_app(
     app.state.store = store
 
     async def one(client: httpx.AsyncClient, kind: str, rng: random.Random) -> dict | None:
+        # Mostly the curated pool; a share of uncurated cards keeps some surprise in it.
+        if settings.curator_enabled and rng.random() < settings.curator_share:
+            pick = store.take(kind, rng.random())
+            if pick:
+                return {**pick["card"], "why": pick["reason"]}
         try:
             card = await asyncio.wait_for(sources.SOURCES[kind](client, settings, rng), PER_CARD_TIMEOUT)
             return card.to_dict()
@@ -91,7 +95,11 @@ def create_app(
         avail = sources.configured(settings)
         return {
             "language": settings.language_name,
-            "curator": {"enabled": settings.curator_enabled, "pool": store.pool_size("video")},
+            "curator": {
+                "enabled": settings.curator_enabled,
+                "pools": {k: store.pool_size(k) for k in curator.enabled_kinds(settings)}
+                if settings.curator_enabled else {},
+            },
             "sources": {k: {"configured": avail[k], "weight": settings.weights.get(k, 0)} for k in KINDS},
         }
 
@@ -104,11 +112,16 @@ def create_app(
         return Response(status_code=204)
 
     @app.post("/api/curate")
-    async def curate_now(request: Request):
-        """Run one curation pass now (also runs on its own schedule)."""
+    async def curate_now(request: Request, kind: str = ""):
+        """Run one curation pass now (also runs on its own schedule). ?kind= limits it to one kind."""
         if not settings.curator_enabled:
-            raise HTTPException(409, "curator needs LLM_URL, LLM_KEY and INVIDIOUS_URL")
-        return await curator.curate(request.app.state.client, settings, store)
+            raise HTTPException(409, "curator needs LLM_URL and LLM_KEY")
+        only = None
+        if kind:
+            if kind not in curator.enabled_kinds(settings):
+                raise HTTPException(400, f"{kind} is not curated here")
+            only = [kind]
+        return await curator.curate(request.app.state.client, settings, store, only=only)
 
     @app.get("/api/feed")
     async def feed(

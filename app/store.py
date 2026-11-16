@@ -6,6 +6,7 @@ quick and run in the event loop's thread.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -16,9 +17,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS curated (
     kind      TEXT NOT NULL,
     ref       TEXT NOT NULL,
-    title     TEXT NOT NULL,
-    author    TEXT NOT NULL DEFAULT '',
-    seconds   INTEGER NOT NULL DEFAULT 0,
+    card      TEXT NOT NULL,          -- the Card, as JSON, ready to serve
     reason    TEXT NOT NULL DEFAULT '',
     score     INTEGER NOT NULL DEFAULT 0,
     source    TEXT NOT NULL DEFAULT '',
@@ -41,6 +40,7 @@ CREATE TABLE IF NOT EXISTS rejected (
 
 MAX_SHOWN = 3          # a pick is retired after it's been shown this many times
 MAX_AGE_DAYS = 30
+MAX_AGE_DAYS_BY_KIND = {"news": 2}
 
 
 class Store:
@@ -88,13 +88,14 @@ class Store:
         return {r["ref"] for r in (*a, *b, *c)}
 
     def add_picks(self, kind: str, picks: list[dict[str, Any]], rejected: list[str]) -> None:
+        """picks: [{ref, card (dict), reason, score, source}]"""
         now = time.time()
         with self._lock, self._db:
             self._db.executemany(
-                "INSERT OR IGNORE INTO curated (kind, ref, title, author, seconds, reason, score, source, added_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [(kind, p["ref"], p["title"], p.get("author", ""), int(p.get("seconds") or 0),
-                  p.get("reason", ""), int(p.get("score") or 0), p.get("source", ""), now) for p in picks],
+                "INSERT OR IGNORE INTO curated (kind, ref, card, reason, score, source, added_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(kind, p["ref"], json.dumps(p["card"]), p.get("reason", ""), int(p.get("score") or 0),
+                  p.get("source", ""), now) for p in picks],
             )
             self._db.executemany(
                 "INSERT OR IGNORE INTO rejected (kind, ref, ts) VALUES (?, ?, ?)",
@@ -118,11 +119,15 @@ class Store:
                 return None
             row = rows[int(rng_value * len(rows)) % len(rows)]
             self._db.execute("UPDATE curated SET shown = shown + 1 WHERE kind = ? AND ref = ?", (kind, row["ref"]))
-            return dict(row)
+            out = dict(row)
+            out["card"] = json.loads(out["card"])
+            return out
 
     def prune(self) -> None:
-        cutoff = time.time() - MAX_AGE_DAYS * 86400
+        now = time.time()
         with self._lock, self._db:
-            self._db.execute("DELETE FROM curated WHERE added_at < ?", (cutoff,))
+            self._db.execute("DELETE FROM curated WHERE added_at < ?", (now - MAX_AGE_DAYS * 86400,))
+            for kind, days in MAX_AGE_DAYS_BY_KIND.items():
+                self._db.execute("DELETE FROM curated WHERE kind = ? AND added_at < ?", (kind, now - days * 86400))
             # Remember rejections longer, so the same dud isn't re-scored every run.
             self._db.execute("DELETE FROM rejected WHERE ts < ?", (time.time() - 90 * 86400,))

@@ -2,7 +2,7 @@
 "use strict";
 
 const LABELS = {
-  wikipedia: "Wikipedia", game: "Games", video: "Videos", movie: "Movies",
+  wikipedia: "Wikipedia", news: "News", game: "Games", video: "Videos", movie: "Movies",
   show: "Series", song: "Music", photo: "Photos", language: "Telugu",
 };
 const android = window.LiessureAndroid || null; // injected by the Android app
@@ -49,6 +49,7 @@ function renderCard(c) {
   body.append(el("div", "label", c.label));
   body.append(el("h2", "title", c.title));
   if (c.subtitle) body.append(el("div", "subtitle", c.subtitle));
+  if (c.why) body.append(el("p", "why", c.why));
   if (c.blurb) {
     const p = el("p", "blurb clamp", c.blurb);
     p.onclick = () => p.classList.toggle("clamp");

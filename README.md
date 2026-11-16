@@ -28,7 +28,8 @@ feed, so a fresh deploy shows Wikipedia and language cards only.
 | `movie`, `show` | Jellyfin random item, unwatched first if a user id is set | `JELLYFIN_URL`, `JELLYFIN_TOKEN`, `JELLYFIN_USER_ID` |
 | `song` | Jellyfin random track; "Open Symfonium" on Android | same, plus `MUSIC_APP_PACKAGE` / `MUSIC_APP_NAME` |
 | `photo` | Immich `search/random`, or a today's memory about a third of the time | `IMMICH_URL`, `IMMICH_API_KEY` (read scopes only) |
-| `language` | Practice drill link, Telugu Wikipedia, Telugu videos via Invidious, curated resources | `LANGUAGE_NAME`, `LANGUAGE_WIKIPEDIA`, `LANGUAGE_PRACTICE_URL`, `LANGUAGE_VIDEO_QUERIES` |
+| `news` | RSS/Atom feeds (NPR, BBC World, Guardian Science, Ars Technica, HN best by default), last 72 h | `NEWS_FEEDS` (`a|b|c`), `NEWS_MAX_AGE_HOURS` |
+| `language` | Practice drill link, Lingopie, Telugu Wikipedia, Telugu videos via Invidious, curated resources | `LANGUAGE_NAME`, `LANGUAGE_WIKIPEDIA`, `LANGUAGE_PRACTICE_URL`, `LANGUAGE_VIDEO_QUERIES` |
 
 Each service also takes `*_PUBLIC_URL`: `*_URL` is where the server calls
 the API (can be a LAN address); `*_PUBLIC_URL` is what goes into the links
@@ -45,29 +46,36 @@ Credentials stay server-side. Images from household services go through
 
 ## Curation (LLM gateway)
 
-With `LLM_URL`, `LLM_KEY` and Invidious configured, a background job runs
-every `CURATE_EVERY_HOURS` (default 12, sooner when the pool runs low):
+With `LLM_URL` and `LLM_KEY` set, a background job runs every
+`CURATE_EVERY_HOURS` (default 12; sooner, at most every 30 min, when a pool
+runs low). For each kind it gathers candidates, has the gateway
+(`LLM_MODEL`, default `fast-haiku`) judge them against `CURATOR_PROFILE`,
+your recent opens and per-kind guidance, and keeps the ones scoring at
+least `CURATOR_MIN_SCORE` (7) with a one-line "why":
 
-1. **Candidates** from Invidious: your `INVIDIOUS_TOPICS` searches, the
-   latest uploads from `CURATOR_CHANNELS` (channel ids, `|`-separated), and
-   the *recommended next* list of each video you recently opened or played
-   here. Shorts, live streams and anything already scored are dropped; up
-   to 80 go forward, with the "recommended next" ones first.
-2. **Judging** by the household LiteLLM gateway (`LLM_MODEL`, default
-   `fast-haiku`) against `CURATOR_PROFILE` and your recent opens. It returns
-   a score and a one-line "why" per pick. Picks scoring at least
-   `CURATOR_MIN_SCORE` (7) join the pool; the rest are remembered as
-   rejected so they aren't scored again.
-3. **Serving**: 80% of video cards come from the pool ("Picked for you",
-   with the why as the blurb), the rest from raw search so there's still
-   surprise. A pick retires after it's been shown 3 times.
+| Kind | Broad candidates | "More like what you opened" |
+|---|---|---|
+| `video` | `INVIDIOUS_TOPICS` searches, `CURATOR_CHANNELS` uploads | YouTube recommended-next |
+| `language` | `LANGUAGE_VIDEO_QUERIES`, `LANGUAGE_CHANNELS` (judged as a learner) | YouTube recommended-next |
+| `wikipedia` | 20 random + today's 20 most-read | `morelike:` search |
+| `song` | 60 random tracks from Jellyfin | Jellyfin `Similar` |
+| `news` | recent items from `NEWS_FEEDS` (RSS/Atom) | (recent opens inform the prompt) |
 
-Titles from YouTube are untrusted. The model can only choose among the ids
-it was sent, and anything else it returns is ignored.
+"More like" candidates get first claim on the 80-candidate budget.
+`CURATOR_SHARE` (0.8) of each kind's cards come from its pool and show the
+why; the rest are uncurated so there's still surprise. A pick retires after
+3 showings (news after 2 days). Rejected candidates are remembered for 90
+days so they aren't re-scored.
 
-Opens and plays are recorded via `POST /api/event`, which is what feeds the
-"recommended next" seeds. `POST /api/curate` runs a pass on demand. State
-lives in SQLite on the `liessure-data` volume.
+Candidate text is untrusted. The model can only choose among the ids it was
+sent; anything else it returns is ignored.
+
+Opens and plays are recorded via `POST /api/event`, which seeds the "more
+like" column. `POST /api/curate[?kind=]` runs a pass now. State is SQLite on
+the `liessure-data` volume.
+
+Lingopie has no public API, so it isn't curated: set `LINGOPIE_URL` and it
+appears as a language card.
 
 ## API
 
@@ -75,7 +83,7 @@ lives in SQLite on the `liessure-data` volume.
 - `GET /api/card/{kind}` — one card
 - `GET /api/sources` — which kinds are configured, curator pool size
 - `POST /api/event` — `{kind, ref, action: open|play, title}`
-- `POST /api/curate` — run a curation pass now
+- `POST /api/curate[?kind=video]` — run a curation pass now
 - `GET /healthz`
 
 ## Run locally

@@ -8,12 +8,18 @@ the same reason.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import hashlib
+import html
+import logging
 import random
 import re
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, datetime
+from email.utils import parsedate_to_datetime
+from xml.etree import ElementTree
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote, urlencode
 
@@ -22,8 +28,7 @@ import httpx
 from .config import Settings
 
 
-STORE: Any = None  # app.store.Store, set by main at startup
-
+log = logging.getLogger("liessure.sources")
 
 class Unavailable(Exception):
     """The source is not configured, or had nothing to give this time."""
@@ -44,6 +49,8 @@ class Card:
     embed: dict[str, str] = field(default_factory=dict)
     # Stable id within its kind, reported back by /api/event when you open or play it.
     ref: str = ""
+    # Set when the card came from the LLM-curated pool: why it was picked for you.
+    why: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -132,6 +139,7 @@ def _wiki_card(data: dict[str, Any], kind: str, label: str) -> Card:
         blurb=_clip(data.get("extract"), 1500),
         image=((data.get("originalimage") or data.get("thumbnail") or {}).get("source") or ""),
         url=page,
+        ref=(data.get("titles") or {}).get("canonical") or data.get("title") or "",
     )
 
 
@@ -239,7 +247,14 @@ async def show(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
 
 
 async def song(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
-    item = await _jellyfin_random(client, s, "Audio", unplayed=False)
+    return song_card(s, await _jellyfin_random(client, s, "Audio", unplayed=False))
+
+
+def song_artist(item: dict[str, Any]) -> str:
+    return item.get("AlbumArtist") or ", ".join(item.get("Artists") or [])
+
+
+def song_card(s: Settings, item: dict[str, Any]) -> Card:
     artist = item.get("AlbumArtist") or ", ".join(item.get("Artists") or [])
     sub = " · ".join(x for x in (artist, item.get("Album")) if x)
     if (item.get("ImageTags") or {}).get("Primary"):
@@ -264,6 +279,7 @@ async def song(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
         url=_jellyfin_link(s, item),
         actions=actions,
         embed={"type": "audio", "label": "Play here", "src": f"/stream/audio/{item['Id']}"},
+        ref=item["Id"],
     )
 
 
@@ -445,17 +461,115 @@ async def _random_video(client: httpx.AsyncClient, s: Settings, rng: random.Rand
 
 
 async def video(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
-    # Mostly the curated pool; a share of raw search keeps some surprise in it.
-    if STORE is not None and rng.random() < 0.8:
-        pick = STORE.take("video", rng.random())
-        if pick:
-            v = {"videoId": pick["ref"], "title": pick["title"], "author": pick["author"],
-                 "lengthSeconds": pick["seconds"]}
-            card = _video_card(s, v, "video", "Picked for you")
-            card.blurb = pick["reason"]
-            return card
     v = await _random_video(client, s, rng, s.invidious_topics)
     return _video_card(s, v, "video", "Video")
+
+
+# --------------------------------------------------------------------- news
+
+_news_cache = _TTLCache(1800)
+_TAG = re.compile(r"<[^>]+>")
+NS = {
+    "atom": "http://www.w3.org/2005/Atom",
+    "media": "http://search.yahoo.com/mrss/",
+    "content": "http://purl.org/rss/1.0/modules/content/",
+}
+
+
+def _text(el: Any) -> str:
+    return html.unescape(_TAG.sub(" ", (el.text or "") if el is not None else "")).strip()
+
+
+def _when(raw: str) -> float | None:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return parsedate_to_datetime(raw).timestamp()
+    except (TypeError, ValueError):
+        pass
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def parse_feed(body: bytes) -> list[dict[str, Any]]:
+    """RSS 2.0 or Atom -> [{title, url, summary, source, image, ts}]."""
+    root = ElementTree.fromstring(body)
+    out: list[dict[str, Any]] = []
+    if root.tag == f"{{{NS['atom']}}}feed":
+        source = _text(root.find("atom:title", NS))
+        for e in root.findall("atom:entry", NS):
+            link = next((l.get("href") for l in e.findall("atom:link", NS) if l.get("rel", "alternate") == "alternate"), "")
+            out.append({
+                "title": _text(e.find("atom:title", NS)), "url": link or "",
+                "summary": _text(e.find("atom:summary", NS)) or _text(e.find("atom:content", NS)),
+                "source": source, "image": "",
+                "ts": _when(_text(e.find("atom:published", NS)) or _text(e.find("atom:updated", NS))),
+            })
+        return [i for i in out if i["title"] and i["url"].startswith("http")]
+    channel = root.find("channel")
+    if channel is None:
+        return []
+    source = _text(channel.find("title"))
+    for it in channel.findall("item"):
+        image = ""
+        for path in ("media:content", "media:thumbnail"):
+            m = it.find(path, NS)
+            if m is not None and m.get("url"):
+                image = m.get("url")
+                break
+        enc = it.find("enclosure")
+        if not image and enc is not None and (enc.get("type") or "").startswith("image/"):
+            image = enc.get("url") or ""
+        out.append({
+            "title": _text(it.find("title")), "url": _text(it.find("link")),
+            "summary": _text(it.find("description")), "source": source, "image": image,
+            "ts": _when(_text(it.find("pubDate"))),
+        })
+    return [i for i in out if i["title"] and i["url"].startswith("http")]
+
+
+async def news_items(client: httpx.AsyncClient, s: Settings) -> list[dict[str, Any]]:
+    """Recent items across all feeds, cached for half an hour."""
+    hit = _news_cache.get("all")
+    if hit is not None:
+        return hit
+    results = await asyncio.gather(*(client.get(u) for u in s.news_feeds), return_exceptions=True)
+    cutoff = time.time() - s.news_max_age_hours * 3600
+    items: list[dict[str, Any]] = []
+    for url, r in zip(s.news_feeds, results):
+        try:
+            if isinstance(r, Exception):
+                raise r
+            r.raise_for_status()
+            items += [i for i in parse_feed(r.content) if i["ts"] is None or i["ts"] >= cutoff]
+        except (httpx.HTTPError, ElementTree.ParseError) as e:
+            log.warning("news feed %s failed: %s", url, e)
+    _news_cache.put("all", items)
+    return items
+
+
+def news_card(item: dict[str, Any]) -> Card:
+    return Card(
+        kind="news",
+        label=f"News · {item['source']}" if item.get("source") else "News",
+        title=item["title"],
+        blurb=_clip(item.get("summary"), 400),
+        image=item.get("image") or "",
+        url=item["url"],
+        ref=hashlib.sha1(item["url"].encode()).hexdigest()[:16],
+    )
+
+
+async def news(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    if not s.news_feeds:
+        raise Unavailable("no news feeds")
+    items = await news_items(client, s)
+    if not items:
+        raise Unavailable("feeds had nothing recent")
+    return news_card(rng.choice(items))
 
 
 # ----------------------------------------------------------------- language
@@ -503,6 +617,15 @@ async def language(client: httpx.AsyncClient, s: Settings, rng: random.Random) -
             return _video_card(s, v, "language", f"{lang} video")
         options.append(vid)
 
+    if s.lingopie_url:
+        async def lingopie() -> Card:
+            return Card(
+                kind="language", label="Lingopie", title="Watch an episode on Lingopie",
+                blurb="One episode with dual subtitles. Tap the words you don't know.",
+                url=s.lingopie_url,
+            )
+        options.append(lingopie)
+
     resources = _resources(s)
     if resources:
         async def resource() -> Card:
@@ -533,6 +656,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "song": song,
     "photo": photo,
     "language": language,
+    "news": news,
 }
 
 
@@ -545,8 +669,9 @@ def configured(s: Settings) -> dict[str, bool]:
         "show": bool(s.jellyfin.url and s.jellyfin_token),
         "song": bool(s.jellyfin.url and s.jellyfin_token),
         "photo": bool(s.immich.url and s.immich_api_key),
+        "news": bool(s.news_feeds),
         "language": bool(
-            s.language_practice_url or s.language_wikipedia or _resources(s)
+            s.lingopie_url or s.language_practice_url or s.language_wikipedia or _resources(s)
             or (s.invidious.url and s.language_video_queries)
         ),
     }

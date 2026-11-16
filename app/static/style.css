@@ -70,6 +70,10 @@ body {
 .label { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); font-weight: 700; }
 .title { margin: 4px 0 2px; font-size: 19px; line-height: 1.25; }
 .subtitle { color: var(--muted); font-size: 14px; }
+.why {
+  margin: 8px 0 0; padding-left: 10px; border-left: 3px solid var(--accent);
+  font-size: 14px; color: var(--ink); font-style: italic;
+}
 .blurb { margin: 8px 0 0; font-size: 15px; cursor: pointer; }
 .blurb.clamp { display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
 .player { width: 100%; margin-top: 12px; display: block; }
