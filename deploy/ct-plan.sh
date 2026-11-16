@@ -5,7 +5,7 @@
 #   wtr: creates CT <id> 'liessure' (Debian 13 template from storage local, unprivileged, nesting=1,keyctl=1,
 #        2 cores, 1024 MB, 512 MB swap, 8 GB on nvme, vmbr0 VLAN tag 2, DHCP, firewall=1, onboot, tag liessure,
 #        timezone America/Los_Angeles)
-#        and starts it
+#        and starts it, then waits up to 60 s for its DNS (getent hosts deb.debian.org), else rolls back
 #   ct <id>: apt installs docker.io docker-cli docker-compose curl ca-certificates rsync git
 #   ct <id>: creates a locked user 'runner' in the docker group (its GitHub runner is registered later, by hand,
 #            with deploy/register-runner.sh - not by this plan) and /opt/liessure (owner runner)
