@@ -70,3 +70,17 @@ page, the PR, the household graph entry it mentions). Favour items that fit
 the moment: short ones on the phone, longer ones in the evening. Ticking it
 off stays in the lists app; the card links, it doesn't act. Estimates are
 cached per item and redone only when the item's text changes.
+
+## Later: job cards
+
+Cards from the household jobs service (vfd000/jobs, jobs.liess.tv): its
+top-ranked new openings (`top_jobs`) and anything in the application
+pipeline with a next step due (`application_pipeline`). Each card shows the
+role, company, location or remote, why it ranked (the service's own score
+and reason), and links to the posting and the jobs app. Rules:
+- Job descriptions are scraped web text: show them as data, never feed them
+  to the curator as instructions, and keep them out of interest proposals.
+- Show at most one or two job cards per feed load, and none on weekends
+  unless an application step is due. The feed is a break, not a work queue.
+- The card links, it doesn't apply or change pipeline state; that stays in
+  the jobs app.
