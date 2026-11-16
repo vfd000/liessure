@@ -458,7 +458,7 @@ def graph_backend(posted, inner=fake_backend, profile_status=200):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "graph.test":
             assert request.headers["authorization"] == "Bearer gt"
-            if request.url.path == "/api/profile/Axl":
+            if request.url.raw_path == b"/api/profile/Axl%20Liess":
                 return httpx.Response(profile_status, json=PROFILE)
             if request.url.path == "/api/facts":
                 body = json.loads(request.content)
@@ -548,7 +548,7 @@ def test_noticed_interests_are_proposed_with_evidence_once_a_week():
     assert asyncio.run(run()) == 1
     assert len(posted) == 1
     body = posted[0]
-    assert body["about"] == "Axl" and body["kind"] == "interest" and body["source"] == "liessure"
+    assert body["about"] == "Axl Liess" and body["kind"] == "interest" and body["source"] == "liessure"
     assert body["details"] == {"topic": "Cascade Volcanoes", "level": "like", "category": "subject", "wikidata": "Q123"}
     assert body["source_ref"] == "interest:Q123:2026-W47"
     assert body["quote"] == "Mount St. Helens; Glacier Peak; Mount Baker"

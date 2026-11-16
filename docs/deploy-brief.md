@@ -92,7 +92,7 @@ activity.liess.tv and watch.liess.tv.
      `/api/trips`' real shape against `app/context.py:parse_trips` and fix
      the parser in a liessure PR if it misses names, dates or places.
    - `GRAPH_TOKEN` (the graph's `MCP_API_TOKEN` bot token) +
-     `GRAPH_URL=https://graph.liess.tv`. Leave `GRAPH_PERSON` at `Axl`.
+     `GRAPH_URL=https://graph.liess.tv`. Leave `GRAPH_PERSON` at `Axl Liess` (the household entry's exact name; there is no `Axl` alias).
    - `LANGUAGE_PRACTICE_URL=https://practice.liess.tv` only if that's
      live (scripts/language-practice says it was staged, not deployed).
    - Leave the rest unset: the defaults are axl's (Seattle, Telugu then

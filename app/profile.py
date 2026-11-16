@@ -19,6 +19,8 @@ import time
 from datetime import date
 from typing import Any
 
+from urllib.parse import quote
+
 import httpx
 
 from .config import DEFAULT_PROFILE, Settings
@@ -129,7 +131,7 @@ class ProfileCache:
             return self.settings
         self._at = time.monotonic()
         try:
-            r = await client.get(f"{s.graph.url}/api/profile/{s.graph_person}",
+            r = await client.get(f"{s.graph.url}/api/profile/{quote(s.graph_person, safe='')}",
                                  headers={"Authorization": f"Bearer {s.graph_token}"})
             r.raise_for_status()
             self.raw = r.json()

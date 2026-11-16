@@ -162,7 +162,8 @@ class Settings:
     # The household graph: the person's interests, languages, projects, home.
     graph: Service = field(default_factory=Service)
     graph_token: str = ""
-    graph_person: str = "Axl"
+    # The household entry's exact name (or system:id, e.g. zitadel:<sub>).
+    graph_person: str = "Axl Liess"
 
     data_dir: str = "/data"
 
@@ -230,7 +231,7 @@ class Settings:
             travel_token=_env("TRAVEL_TOKEN"),
             graph=svc("GRAPH"),
             graph_token=_env("GRAPH_TOKEN"),
-            graph_person=_env("GRAPH_PERSON", "Axl"),
+            graph_person=_env("GRAPH_PERSON", "Axl Liess"),
             data_dir=_env("DATA_DIR", "/data"),
             llm_url=_strip(_env("LLM_URL")),
             llm_key=_env("LLM_KEY"),
