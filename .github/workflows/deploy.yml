@@ -1,9 +1,15 @@
 name: deploy
 # Runs on the runner installed on Liessure's own LXC. Never add pull_request here.
+#
+# Settings and secrets live on the box in /opt/liessure/.env (0600, runner),
+# written by the deploy-worker plan that created the CT and edited by hand
+# after. Compose reads it for ${VAR} interpolation. Nothing comes from GitHub
+# variables or secrets: an unset GitHub variable is an empty string, and an
+# empty string in the job's environment would override the .env value.
 on:
   push:
     branches: [main]
-    paths-ignore: ["android/**", "**.md"]
+    paths-ignore: ["android/**", "**.md", "docs/**"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,66 +19,20 @@ concurrency:
 jobs:
   deploy:
     runs-on: [self-hosted, liessure-r7]
-    env:
-      LIESSURE_WEIGHTS: ${{ vars.LIESSURE_WEIGHTS }}
-      WIKIPEDIA_LANG: ${{ vars.WIKIPEDIA_LANG }}
-      JELLYFIN_URL: ${{ vars.JELLYFIN_URL }}
-      JELLYFIN_PUBLIC_URL: ${{ vars.JELLYFIN_PUBLIC_URL }}
-      JELLYFIN_TOKEN: ${{ secrets.JELLYFIN_TOKEN }}
-      JELLYFIN_USER_ID: ${{ vars.JELLYFIN_USER_ID }}
-      IMMICH_URL: ${{ vars.IMMICH_URL }}
-      IMMICH_PUBLIC_URL: ${{ vars.IMMICH_PUBLIC_URL }}
-      IMMICH_API_KEY: ${{ secrets.IMMICH_API_KEY }}
-      ROMM_URL: ${{ vars.ROMM_URL }}
-      ROMM_PUBLIC_URL: ${{ vars.ROMM_PUBLIC_URL }}
-      ROMM_TOKEN: ${{ secrets.ROMM_TOKEN }}
-      ROMM_USERNAME: ${{ vars.ROMM_USERNAME }}
-      ROMM_PASSWORD: ${{ secrets.ROMM_PASSWORD }}
-      INVIDIOUS_URL: ${{ vars.INVIDIOUS_URL }}
-      INVIDIOUS_PUBLIC_URL: ${{ vars.INVIDIOUS_PUBLIC_URL }}
-      INVIDIOUS_TOPICS: ${{ vars.INVIDIOUS_TOPICS }}
-      INVIDIOUS_WATCH_TOKEN: ${{ secrets.INVIDIOUS_WATCH_TOKEN }}
-      LLM_URL: ${{ vars.LLM_URL }}
-      LLM_KEY: ${{ secrets.LLM_KEY }}
-      LLM_MODEL: ${{ vars.LLM_MODEL }}
-      CURATOR_PROFILE: ${{ vars.CURATOR_PROFILE }}
-      CURATOR_CHANNELS: ${{ vars.CURATOR_CHANNELS }}
-      CURATE_EVERY_HOURS: ${{ vars.CURATE_EVERY_HOURS }}
-      CURATOR_SHARE: ${{ vars.CURATOR_SHARE }}
-      NEWS_FEEDS: ${{ vars.NEWS_FEEDS }}
-      NEWS_MAX_AGE_HOURS: ${{ vars.NEWS_MAX_AGE_HOURS }}
-      LINGOPIE_URL: ${{ vars.LINGOPIE_URL }}
-      LANGUAGE_CHANNELS: ${{ vars.LANGUAGE_CHANNELS }}
-      HOME_NAME: ${{ vars.HOME_NAME }}
-      HOME_COORDS: ${{ vars.HOME_COORDS }}
-      WIKI_INTERESTS: ${{ vars.WIKI_INTERESTS }}
-      ARGOSY: ${{ vars.ARGOSY }}
-      VIDEO_LINK: ${{ vars.VIDEO_LINK }}
-      NEBULA_FEEDS: ${{ vars.NEBULA_FEEDS }}
-      TRAVEL_URL: ${{ vars.TRAVEL_URL }}
-      CURATOR_VISION: ${{ vars.CURATOR_VISION }}
-      LANGUAGES_LEARNING: ${{ vars.LANGUAGES_LEARNING }}
-      LANGUAGES_CURIOUS: ${{ vars.LANGUAGES_CURIOUS }}
-      LANGUAGES_FLUENT: ${{ vars.LANGUAGES_FLUENT }}
-      TRAVEL_TOKEN: ${{ secrets.TRAVEL_TOKEN }}
-      GRAPH_URL: ${{ vars.GRAPH_URL }}
-      GRAPH_TOKEN: ${{ secrets.GRAPH_TOKEN }}
-      GRAPH_PERSON: ${{ vars.GRAPH_PERSON }}
-      LANGUAGE_PRACTICE_URL: ${{ vars.LANGUAGE_PRACTICE_URL }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Preflight
-        # Every source is optional, so nothing is fatal; say what's missing.
         run: |
-          [ -n "$JELLYFIN_URL" ] && [ -z "$JELLYFIN_TOKEN" ] && echo "::warning::JELLYFIN_URL set but JELLYFIN_TOKEN empty"
-          [ -n "$IMMICH_URL" ] && [ -z "$IMMICH_API_KEY" ] && echo "::warning::IMMICH_URL set but IMMICH_API_KEY empty"
-          [ -n "$ROMM_URL" ] && [ -z "$ROMM_TOKEN$ROMM_PASSWORD" ] && echo "::warning::ROMM_URL set but no RomM credential"
-          [ -n "$LLM_URL" ] && [ -z "$LLM_KEY" ] && echo "::warning::LLM_URL set but LLM_KEY empty (curator off)"
-          true
+          test -f /opt/liessure/.env || { echo "::error::/opt/liessure/.env is missing"; exit 1; }
+          # Say which sources are switched off, without printing any value.
+          for k in JELLYFIN_TOKEN IMMICH_API_KEY ROMM_TOKEN INVIDIOUS_WATCH_TOKEN LLM_KEY TRAVEL_TOKEN GRAPH_TOKEN; do
+            grep -q "^$k=." /opt/liessure/.env || echo "::warning::$k is empty in /opt/liessure/.env"
+          done
 
       - name: Sync to /opt/liessure
-        run: rsync -a --delete --exclude .git --exclude android ./ /opt/liessure/
+        # .env is the box's own; never delete or overwrite it.
+        run: rsync -a --delete --exclude .git --exclude android --exclude .env ./ /opt/liessure/
 
       - name: Build and start
         working-directory: /opt/liessure
