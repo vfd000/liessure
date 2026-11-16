@@ -1,5 +1,5 @@
 name: deploy
-# Runs on the runner installed on Detour's own LXC. Never add pull_request here.
+# Runs on the runner installed on Liessure's own LXC. Never add pull_request here.
 on:
   push:
     branches: [main]
@@ -12,9 +12,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   deploy:
-    runs-on: [self-hosted, detour-r7]
+    runs-on: [self-hosted, liessure-r7]
     env:
-      DETOUR_WEIGHTS: ${{ vars.DETOUR_WEIGHTS }}
+      LIESSURE_WEIGHTS: ${{ vars.LIESSURE_WEIGHTS }}
       WIKIPEDIA_LANG: ${{ vars.WIKIPEDIA_LANG }}
       JELLYFIN_URL: ${{ vars.JELLYFIN_URL }}
       JELLYFIN_PUBLIC_URL: ${{ vars.JELLYFIN_PUBLIC_URL }}
@@ -31,6 +31,12 @@ jobs:
       INVIDIOUS_URL: ${{ vars.INVIDIOUS_URL }}
       INVIDIOUS_PUBLIC_URL: ${{ vars.INVIDIOUS_PUBLIC_URL }}
       INVIDIOUS_TOPICS: ${{ vars.INVIDIOUS_TOPICS }}
+      LLM_URL: ${{ vars.LLM_URL }}
+      LLM_KEY: ${{ secrets.LLM_KEY }}
+      LLM_MODEL: ${{ vars.LLM_MODEL }}
+      CURATOR_PROFILE: ${{ vars.CURATOR_PROFILE }}
+      CURATOR_CHANNELS: ${{ vars.CURATOR_CHANNELS }}
+      CURATE_EVERY_HOURS: ${{ vars.CURATE_EVERY_HOURS }}
       LANGUAGE_NAME: ${{ vars.LANGUAGE_NAME }}
       LANGUAGE_WIKIPEDIA: ${{ vars.LANGUAGE_WIKIPEDIA }}
       LANGUAGE_PRACTICE_URL: ${{ vars.LANGUAGE_PRACTICE_URL }}
@@ -44,13 +50,14 @@ jobs:
           [ -n "$JELLYFIN_URL" ] && [ -z "$JELLYFIN_TOKEN" ] && echo "::warning::JELLYFIN_URL set but JELLYFIN_TOKEN empty"
           [ -n "$IMMICH_URL" ] && [ -z "$IMMICH_API_KEY" ] && echo "::warning::IMMICH_URL set but IMMICH_API_KEY empty"
           [ -n "$ROMM_URL" ] && [ -z "$ROMM_TOKEN$ROMM_PASSWORD" ] && echo "::warning::ROMM_URL set but no RomM credential"
+          [ -n "$LLM_URL" ] && [ -z "$LLM_KEY" ] && echo "::warning::LLM_URL set but LLM_KEY empty (curator off)"
           true
 
-      - name: Sync to /opt/detour
-        run: rsync -a --delete --exclude .git --exclude android ./ /opt/detour/
+      - name: Sync to /opt/liessure
+        run: rsync -a --delete --exclude .git --exclude android ./ /opt/liessure/
 
       - name: Build and start
-        working-directory: /opt/detour
+        working-directory: /opt/liessure
         run: docker compose up -d --build --remove-orphans
 
       - name: Health check
@@ -59,7 +66,7 @@ jobs:
             curl -fsS http://127.0.0.1:8000/healthz && exit 0
             sleep 2
           done
-          docker compose -f /opt/detour/docker-compose.yml logs --tail 50
+          docker compose -f /opt/liessure/docker-compose.yml logs --tail 50
           exit 1
 
       - name: Prune

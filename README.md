@@ -1,4 +1,4 @@
-# Detour
+# Liessure
 
 When the thumb reaches for Reddit, land here instead: an endless feed of
 things that are actually yours or actually worth it. A random Wikipedia
@@ -32,7 +32,7 @@ feed, so a fresh deploy shows Wikipedia and language cards only.
 
 Each service also takes `*_PUBLIC_URL`: `*_URL` is where the server calls
 the API (can be a LAN address); `*_PUBLIC_URL` is what goes into the links
-you tap. Mix is tuned with `DETOUR_WEIGHTS`, e.g.
+you tap. Mix is tuned with `LIESSURE_WEIGHTS`, e.g.
 `language=5,photo=3,wikipedia=2,game=0`.
 
 Cards are meant to be consumed in place, like a feed: Wikipedia text
@@ -43,11 +43,39 @@ inline Invidious embed. "Open" goes to the real thing.
 Credentials stay server-side. Images from household services go through
 `/img`, which only fetches from the configured service bases.
 
+## Curation (LLM gateway)
+
+With `LLM_URL`, `LLM_KEY` and Invidious configured, a background job runs
+every `CURATE_EVERY_HOURS` (default 12, sooner when the pool runs low):
+
+1. **Candidates** from Invidious: your `INVIDIOUS_TOPICS` searches, the
+   latest uploads from `CURATOR_CHANNELS` (channel ids, `|`-separated), and
+   the *recommended next* list of each video you recently opened or played
+   here. Shorts, live streams and anything already scored are dropped; up
+   to 80 go forward, with the "recommended next" ones first.
+2. **Judging** by the household LiteLLM gateway (`LLM_MODEL`, default
+   `fast-haiku`) against `CURATOR_PROFILE` and your recent opens. It returns
+   a score and a one-line "why" per pick. Picks scoring at least
+   `CURATOR_MIN_SCORE` (7) join the pool; the rest are remembered as
+   rejected so they aren't scored again.
+3. **Serving**: 80% of video cards come from the pool ("Picked for you",
+   with the why as the blurb), the rest from raw search so there's still
+   surprise. A pick retires after it's been shown 3 times.
+
+Titles from YouTube are untrusted. The model can only choose among the ids
+it was sent, and anything else it returns is ignored.
+
+Opens and plays are recorded via `POST /api/event`, which is what feeds the
+"recommended next" seeds. `POST /api/curate` runs a pass on demand. State
+lives in SQLite on the `liessure-data` volume.
+
 ## API
 
 - `GET /api/feed?n=6&kinds=photo,game` — a batch of cards (no kind twice in a row)
 - `GET /api/card/{kind}` — one card
-- `GET /api/sources` — which kinds are configured
+- `GET /api/sources` — which kinds are configured, curator pool size
+- `POST /api/event` — `{kind, ref, action: open|play, title}`
+- `POST /api/curate` — run a curation pass now
 - `GET /healthz`
 
 ## Run locally
@@ -61,19 +89,21 @@ python -m pytest -q
 ## Deploy
 
 Same pattern as the other service repos (`runner-on-the-box` in `bb`):
-merge to `main` → `deploy.yml` on the self-hosted runner `detour-r7` on
-Detour's own LXC → `rsync` to `/opt/detour` → `docker compose up -d --build`.
+merge to `main` → `deploy.yml` on the self-hosted runner `liessure-r7` on
+Liessure's own LXC → `rsync` to `/opt/liessure` → `docker compose up -d --build`.
 Non-secret settings are GitHub Actions **variables**, credentials are
 **secrets** (`JELLYFIN_TOKEN`, `IMMICH_API_KEY`, `ROMM_TOKEN`/`ROMM_PASSWORD`).
 
 Not done yet (needs the LXC):
 
-- [ ] LXC + runner `detour-r7`, `/opt/detour` owned by the runner user
-- [ ] NPM host `detour.liess.tv` with its own DNS-01 cert, on the
+- [ ] LXC + runner `liessure-r7`, `/opt/liessure` owned by the runner user
+- [ ] NPM host `liessure.liess.tv` with its own DNS-01 cert, on the
       gatekeeper list + mTLS door (the app has no login of its own yet)
 - [ ] Per-CT firewall: 8000 from NPM only
 - [ ] Alloy log shipping, inventory rows
 - [ ] A Jellyfin API key, a read-only Immich key, a RomM credential
+- [ ] A LiteLLM virtual key scoped to `fast-haiku` only, as secret `LLM_KEY`;
+      `LLM_URL=https://llm.liess.tv` (LAN-only, which the LXC is)
 
 ## Android
 
@@ -81,13 +111,13 @@ Not done yet (needs the LXC):
 self-hosted one). Each signed build on `main` becomes a GitHub release
 tagged `v0.1.<run>` with the APK attached, which is what **Obtainium** tracks.
 
-- Once: `scripts/make-keystore.sh vfd000/detour` creates the signing key and
-  sets the four `DETOUR_KEY*` secrets. Unsigned builds are never released,
+- Once: `scripts/make-keystore.sh vfd000/liessure` creates the signing key and
+  sets the four `LIESSURE_KEY*` secrets. Unsigned builds are never released,
   because a changing debug key would make Android refuse the update.
 - Obtainium: add the repo URL. The repo is private, so give Obtainium a
   fine-grained GitHub token with read-only Contents on this repo.
-- The web app URL is baked in from `android/gradle.properties` (`detourUrl`).
-- **Catching Reddit links:** Settings → Apps → Detour → Open by default →
+- The web app URL is baked in from `android/gradle.properties` (`liessureUrl`).
+- **Catching Reddit links:** Settings → Apps → Liessure → Open by default →
   Add link → tick the reddit hosts. (Reddit's own app, if installed, has to
-  be uninstalled or have its link handling turned off.) Then put Detour where
+  be uninstalled or have its link handling turned off.) Then put Liessure where
   the Reddit icon used to be.

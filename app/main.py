@@ -13,10 +13,13 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 
-from . import sources
-from .config import KINDS, Settings
+from pydantic import BaseModel, Field
 
-log = logging.getLogger("detour")
+from . import curator, sources
+from .config import KINDS, Settings
+from .store import Store
+
+log = logging.getLogger("liessure")
 STATIC = Path(__file__).parent / "static"
 PER_CARD_TIMEOUT = 8.0
 
@@ -32,8 +35,22 @@ def pick_kinds(weights: dict[str, int], available: dict[str, bool], n: int, rng:
     return picked
 
 
-def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+class Event(BaseModel):
+    kind: str
+    action: str = Field(pattern="^(open|play)$")
+    ref: str = Field("", max_length=128)
+    title: str = Field("", max_length=300)
+
+
+def create_app(
+    settings: Settings | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+    store: Store | None = None,
+    run_curator: bool = True,
+) -> FastAPI:
     settings = settings or Settings.from_env()
+    store = store or Store(f"{settings.data_dir}/liessure.db")
+    sources.STORE = store
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -43,13 +60,19 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             follow_redirects=True,
             transport=transport,
         )
+        task = None
+        if run_curator and settings.curator_enabled:
+            task = asyncio.create_task(curator.loop(app.state.client, settings, store))
         try:
             yield
         finally:
+            if task:
+                task.cancel()
             await app.state.client.aclose()
 
-    app = FastAPI(title="Detour", lifespan=lifespan, docs_url=None, redoc_url=None)
+    app = FastAPI(title="Liessure", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.settings = settings
+    app.state.store = store
 
     async def one(client: httpx.AsyncClient, kind: str, rng: random.Random) -> dict | None:
         try:
@@ -68,8 +91,24 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         avail = sources.configured(settings)
         return {
             "language": settings.language_name,
+            "curator": {"enabled": settings.curator_enabled, "pool": store.pool_size("video")},
             "sources": {k: {"configured": avail[k], "weight": settings.weights.get(k, 0)} for k in KINDS},
         }
+
+    @app.post("/api/event", status_code=204)
+    async def event(e: Event):
+        """What you opened or played. Feeds the curator's 'recommended next' seeds."""
+        if e.kind not in KINDS:
+            raise HTTPException(400, "unknown kind")
+        store.record(e.kind, e.ref, e.action, e.title)
+        return Response(status_code=204)
+
+    @app.post("/api/curate")
+    async def curate_now(request: Request):
+        """Run one curation pass now (also runs on its own schedule)."""
+        if not settings.curator_enabled:
+            raise HTTPException(409, "curator needs LLM_URL, LLM_KEY and INVIDIOUS_URL")
+        return await curator.curate(request.app.state.client, settings, store)
 
     @app.get("/api/feed")
     async def feed(

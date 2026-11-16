@@ -1,15 +1,17 @@
-# Deployed to /opt/detour by .github/workflows/deploy.yml (self-hosted runner
+# Deployed to /opt/liessure by .github/workflows/deploy.yml (self-hosted runner
 # on the service's own LXC). Secrets come in as env vars from GitHub Actions
 # secrets; nothing is written to disk. Every source is optional.
 services:
-  detour:
+  liessure:
     build: .
-    image: detour:local
+    image: liessure:local
     restart: unless-stopped
     ports:
       - "8000:8000"
+    volumes:
+      - liessure-data:/data   # curated pool + open/play history (SQLite)
     environment:
-      DETOUR_WEIGHTS: ${DETOUR_WEIGHTS:-}
+      LIESSURE_WEIGHTS: ${LIESSURE_WEIGHTS:-}
       WIKIPEDIA_LANG: ${WIKIPEDIA_LANG:-en}
       JELLYFIN_URL: ${JELLYFIN_URL:-}
       JELLYFIN_PUBLIC_URL: ${JELLYFIN_PUBLIC_URL:-}
@@ -26,7 +28,16 @@ services:
       INVIDIOUS_URL: ${INVIDIOUS_URL:-}
       INVIDIOUS_PUBLIC_URL: ${INVIDIOUS_PUBLIC_URL:-}
       INVIDIOUS_TOPICS: ${INVIDIOUS_TOPICS:-}
+      LLM_URL: ${LLM_URL:-}
+      LLM_KEY: ${LLM_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-fast-haiku}
+      CURATOR_PROFILE: ${CURATOR_PROFILE:-}
+      CURATOR_CHANNELS: ${CURATOR_CHANNELS:-}
+      CURATE_EVERY_HOURS: ${CURATE_EVERY_HOURS:-12}
       LANGUAGE_NAME: ${LANGUAGE_NAME:-Telugu}
       LANGUAGE_WIKIPEDIA: ${LANGUAGE_WIKIPEDIA:-te}
       LANGUAGE_PRACTICE_URL: ${LANGUAGE_PRACTICE_URL:-}
       LANGUAGE_VIDEO_QUERIES: ${LANGUAGE_VIDEO_QUERIES:-}
+
+volumes:
+  liessure-data:

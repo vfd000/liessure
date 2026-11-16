@@ -7,7 +7,9 @@ from fastapi.testclient import TestClient
 
 from app import sources
 from app.config import Service, Settings, parse_weights
+from app import curator
 from app.main import create_app, pick_kinds
+from app.store import Store
 
 JF = "http://jf.test"
 IM = "http://im.test"
@@ -74,7 +76,7 @@ def full_settings() -> Settings:
 
 @pytest.fixture
 def client():
-    app = create_app(full_settings(), transport=httpx.MockTransport(fake_backend))
+    app = create_app(full_settings(), transport=httpx.MockTransport(fake_backend), store=Store(":memory:"), run_curator=False)
     with TestClient(app) as c:
         yield c
 
@@ -121,7 +123,7 @@ def test_image_proxy_only_household_hosts(client):
 
 
 def test_unconfigured_sources_are_skipped():
-    app = create_app(Settings(), transport=httpx.MockTransport(fake_backend))
+    app = create_app(Settings(), transport=httpx.MockTransport(fake_backend), store=Store(":memory:"), run_curator=False)
     with TestClient(app) as c:
         s = c.get("/api/sources").json()["sources"]
         assert s["wikipedia"]["configured"] and not s["movie"]["configured"]
@@ -138,7 +140,7 @@ def test_weights_and_pick():
 
 def test_index_served(client):
     r = client.get("/")
-    assert r.status_code == 200 and "Detour" in r.text
+    assert r.status_code == 200 and "Liessure" in r.text
     assert client.get("/app.js").status_code == 200
 
 
@@ -156,3 +158,69 @@ def test_audio_stream_proxy(client):
     r = client.get("/stream/audio/abcdef12", headers={"Range": "bytes=0-1"})
     assert r.status_code == 206 and r.headers["content-range"] == "bytes 0-1/4"
     assert client.get("/stream/audio/..%2Fetc").status_code == 404
+
+
+# ------------------------------------------------------------------ curator
+
+def curator_backend(calls):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/v1/search":
+            return httpx.Response(200, json=[
+                {"type": "video", "videoId": "goodvideo01", "title": "How bridges stand up", "author": "Eng", "lengthSeconds": 900},
+                {"type": "video", "videoId": "dramavideo1", "title": "YOU WON'T BELIEVE", "author": "X", "lengthSeconds": 600},
+                {"type": "video", "videoId": "shortvideo1", "title": "short", "author": "X", "lengthSeconds": 40},
+            ])
+        if path.startswith("/api/v1/videos/"):
+            return httpx.Response(200, json={"recommendedVideos": [
+                {"videoId": "relatedvid1", "title": "Suspension bridges", "author": "Eng", "lengthSeconds": 1200}]})
+        if path == "/v1/chat/completions":
+            body = json.loads(request.content)
+            calls.append(body)
+            assert request.headers["authorization"] == "Bearer llmk"
+            content = json.dumps({"picks": [
+                {"id": "goodvideo01", "score": 9, "why": "Engineering you like, done well."},
+                {"id": "relatedvid1", "score": 8, "why": "Follows the bridge video you opened."},
+                {"id": "dramavideo1", "score": 2, "why": "nah"},
+                {"id": "notacandid1", "score": 10, "why": "injected"},
+            ]})
+            return httpx.Response(200, json={"choices": [{"message": {"content": "Sure:\n" + content}}]})
+        return httpx.Response(404)
+    return handler
+
+
+def test_curator_end_to_end():
+    calls = []
+    s = full_settings()
+    s.llm_url, s.llm_key, s.invidious_topics = "http://llm.test", "llmk", ["bridges"]
+    store = Store(":memory:")
+    app = create_app(s, transport=httpx.MockTransport(curator_backend(calls)), store=store, run_curator=False)
+    with TestClient(app) as c:
+        assert c.post("/api/event", json={"kind": "video", "ref": "openedvid01", "action": "open",
+                                          "title": "Bridges 101"}).status_code == 204
+        stats = c.post("/api/curate").json()
+        assert stats == {"candidates": 3, "picked": 2}
+        prompt = calls[0]["messages"][1]["content"]
+        assert "Bridges 101" in prompt and "shortvideo1" not in prompt
+        assert calls[0]["model"] == "fast-haiku"
+        assert store.pool_size("video") == 2
+
+        cards = [c.get("/api/card/video").json() for _ in range(30)]
+        picked = {x["ref"] for x in cards if x["label"] == "Picked for you"}
+        assert picked == {"goodvideo01", "relatedvid1"}  # low score and invented ids never enter the pool
+        assert any(x["blurb"] == "Engineering you like, done well." for x in cards)
+
+        # Second run: everything already scored, nothing to send.
+        assert c.post("/api/curate").json() == {"candidates": 0, "picked": 0}
+        assert len(calls) == 1
+
+
+def test_parse_picks_rejects_junk():
+    assert curator.parse_picks("no json here", {"a"}) == []
+    got = curator.parse_picks('{"picks":[{"id":"a","score":"11","why":"x"},{"id":"b","score":5}]}', {"a"})
+    assert got == [{"id": "a", "score": 10, "why": "x"}]
+
+
+def test_event_validation(client):
+    assert client.post("/api/event", json={"kind": "video", "action": "delete"}).status_code == 422
+    assert client.post("/api/event", json={"kind": "nope", "action": "open"}).status_code == 400

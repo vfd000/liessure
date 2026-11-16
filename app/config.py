@@ -5,7 +5,7 @@ simply left out of the feed, so the app runs with only Wikipedia on day one
 and picks up each household service as its secret is added.
 
 Each service has two URLs:
-  *_URL         where the Detour server reaches the API (can be a LAN address)
+  *_URL         where the Liessure server reaches the API (can be a LAN address)
   *_PUBLIC_URL  what goes into the links you tap (defaults to *_URL)
 """
 
@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 
 
 def _env(name: str, default: str = "") -> str:
-    return os.environ.get(name, default).strip()
+    # Compose passes unset variables through as "", so empty means "use the default".
+    return os.environ.get(name, "").strip() or default
 
 
 def _strip(url: str) -> str:
@@ -35,6 +36,13 @@ DEFAULT_WEIGHTS = {
 }
 
 KINDS = tuple(DEFAULT_WEIGHTS)
+
+DEFAULT_PROFILE = (
+    "Curious adult who runs a self-hosted home lab, hikes and backpacks in the "
+    "Pacific Northwest, plays retro games, and is learning Telugu. Likes "
+    "explainers, engineering and how-things-work, science, history, travel, "
+    "food, and long-form craft. Has little patience for hype, drama or outrage."
+)
 
 
 def parse_weights(raw: str) -> dict[str, int]:
@@ -68,7 +76,11 @@ class Service:
 
 @dataclass
 class Settings:
-    user_agent: str = "Detour/0.1 (self-hosted; personal use)"
+    @property
+    def curator_enabled(self) -> bool:
+        return bool(self.llm_url and self.llm_key and self.invidious.url)
+
+    user_agent: str = "Liessure/0.1 (self-hosted; personal use)"
     weights: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_WEIGHTS))
 
     wikipedia_lang: str = "en"
@@ -91,6 +103,17 @@ class Settings:
     invidious: Service = field(default_factory=Service)
     invidious_topics: list[str] = field(default_factory=list)
 
+    data_dir: str = "/data"
+
+    llm_url: str = ""
+    llm_key: str = ""
+    llm_model: str = "fast-haiku"
+    curator_profile: str = ""
+    curator_channels: list[str] = field(default_factory=list)
+    curator_picks: int = 15
+    curator_min_score: int = 7
+    curate_every_hours: float = 12
+
     language_name: str = "Telugu"
     language_wikipedia: str = "te"
     language_practice_url: str = ""
@@ -103,8 +126,8 @@ class Settings:
             return Service(url=url, public_url=_strip(_env(f"{prefix}_PUBLIC_URL")))
 
         return cls(
-            user_agent=_env("DETOUR_USER_AGENT", cls.user_agent),
-            weights=parse_weights(_env("DETOUR_WEIGHTS")),
+            user_agent=_env("LIESSURE_USER_AGENT", cls.user_agent),
+            weights=parse_weights(_env("LIESSURE_WEIGHTS")),
             wikipedia_lang=_env("WIKIPEDIA_LANG", "en"),
             jellyfin=svc("JELLYFIN"),
             jellyfin_token=_env("JELLYFIN_TOKEN"),
@@ -125,6 +148,15 @@ class Settings:
                     "|cooking|hiking|retro games|music live session",
                 )
             ),
+            data_dir=_env("DATA_DIR", "/data"),
+            llm_url=_strip(_env("LLM_URL")),
+            llm_key=_env("LLM_KEY"),
+            llm_model=_env("LLM_MODEL", "fast-haiku"),
+            curator_profile=_env("CURATOR_PROFILE", DEFAULT_PROFILE),
+            curator_channels=parse_list(_env("CURATOR_CHANNELS")),
+            curator_picks=int(_env("CURATOR_PICKS", "15") or 15),
+            curator_min_score=int(_env("CURATOR_MIN_SCORE", "7") or 7),
+            curate_every_hours=float(_env("CURATE_EVERY_HOURS", "12") or 12),
             language_name=_env("LANGUAGE_NAME", "Telugu"),
             language_wikipedia=_env("LANGUAGE_WIKIPEDIA", "te"),
             language_practice_url=_strip(_env("LANGUAGE_PRACTICE_URL")),

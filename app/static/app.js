@@ -1,11 +1,11 @@
-// Detour front end: an endless feed of things that are better than a scroll.
+// Liessure front end: an endless feed of things that are better than a scroll.
 "use strict";
 
 const LABELS = {
   wikipedia: "Wikipedia", game: "Games", video: "Videos", movie: "Movies",
   show: "Series", song: "Music", photo: "Photos", language: "Telugu",
 };
-const android = window.DetourAndroid || null; // injected by the Android app
+const android = window.LiessureAndroid || null; // injected by the Android app
 const feed = document.getElementById("feed");
 const sentinel = document.getElementById("sentinel");
 const chips = document.getElementById("chips");
@@ -22,6 +22,12 @@ function el(tag, cls, text) {
   if (cls) e.className = cls;
   if (text) e.textContent = text;
   return e;
+}
+
+function report(c, action) {
+  if (!c.ref) return;
+  const body = JSON.stringify({ kind: c.kind, ref: c.ref, action, title: c.title });
+  fetch("/api/event", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
 }
 
 function openUrl(url) {
@@ -52,14 +58,14 @@ function renderCard(c) {
   const actions = el("div", "actions");
   if (c.embed && c.embed.src) {
     const play = el("button", "primary", "▶ " + (c.embed.label || "Play here"));
-    play.onclick = () => { playInline(card, c.embed); play.remove(); };
+    play.onclick = () => { playInline(card, c.embed); play.remove(); report(c, "play"); };
     actions.append(play);
   }
   const go = el("a", c.embed && c.embed.src ? "" : "primary", "Open");
   go.href = c.url;
   go.target = "_blank";
   go.rel = "noopener";
-  go.onclick = (e) => { e.preventDefault(); openUrl(c.url); };
+  go.onclick = (e) => { e.preventDefault(); report(c, "open"); openUrl(c.url); };
   actions.append(go);
   for (const a of c.actions || []) {
     if (a.app) {
@@ -77,7 +83,7 @@ function renderCard(c) {
   body.append(actions);
   card.append(body);
 
-  if (c.image) card.querySelector(".media").onclick = () => openUrl(c.url);
+  if (c.image) card.querySelector(".media").onclick = () => { report(c, "open"); openUrl(c.url); };
   return card;
 }
 
@@ -125,7 +131,7 @@ async function load(n = 6) {
     }
     for (const c of cards) feed.append(renderCard(c));
   } catch (e) {
-    if (!feed.children.length) feed.append(el("div", "empty", "Couldn't reach Detour. ↻ to retry."));
+    if (!feed.children.length) feed.append(el("div", "empty", "Couldn't reach Liessure. ↻ to retry."));
   } finally {
     loading = false;
   }

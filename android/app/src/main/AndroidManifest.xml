@@ -17,10 +17,10 @@
     </queries>
 
     <application
-        android:label="Detour"
+        android:label="Liessure"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:theme="@style/Theme.Detour"
+        android:theme="@style/Theme.Liessure"
         android:supportsRtl="true">
 
         <activity
@@ -34,7 +34,7 @@
             </intent-filter>
 
             <!-- Catch Reddit links. Not verifiable (not our domain), so turn it on
-                 by hand: Settings > Apps > Detour > Open by default > Add link. -->
+                 by hand: Settings > Apps > Liessure > Open by default > Add link. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

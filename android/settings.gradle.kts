@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "Detour"
+rootProject.name = "Liessure"
 include(":app")

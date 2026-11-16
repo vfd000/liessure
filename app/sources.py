@@ -22,6 +22,9 @@ import httpx
 from .config import Settings
 
 
+STORE: Any = None  # app.store.Store, set by main at startup
+
+
 class Unavailable(Exception):
     """The source is not configured, or had nothing to give this time."""
 
@@ -39,6 +42,8 @@ class Card:
     actions: list[dict[str, str]] = field(default_factory=list)
     # Something to consume right in the feed: {"type": "audio"|"video", "src": ...}
     embed: dict[str, str] = field(default_factory=dict)
+    # Stable id within its kind, reported back by /api/event when you open or play it.
+    ref: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -90,7 +95,7 @@ def auth_headers_for(settings: Settings, url: str) -> dict[str, str] | None:
 def _jellyfin_headers(s: Settings) -> dict[str, str]:
     return {
         "Authorization": (
-            'MediaBrowser Client="Detour", Device="server", DeviceId="detour", '
+            'MediaBrowser Client="Liessure", Device="server", DeviceId="liessure", '
             f'Version="0.1", Token="{s.jellyfin_token}"'
         )
     }
@@ -424,6 +429,7 @@ def _video_card(s: Settings, v: dict[str, Any], kind: str, label: str) -> Card:
         image=proxied(f"{s.invidious.url}/vi/{quote(vid)}/mqdefault.jpg"),
         url=f"{s.invidious.link_base}/watch?v={quote(vid)}",
         embed={"type": "video", "label": "Play here", "src": f"{s.invidious.link_base}/embed/{quote(vid)}?autoplay=1"},
+        ref=vid,
     )
 
 
@@ -439,6 +445,15 @@ async def _random_video(client: httpx.AsyncClient, s: Settings, rng: random.Rand
 
 
 async def video(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    # Mostly the curated pool; a share of raw search keeps some surprise in it.
+    if STORE is not None and rng.random() < 0.8:
+        pick = STORE.take("video", rng.random())
+        if pick:
+            v = {"videoId": pick["ref"], "title": pick["title"], "author": pick["author"],
+                 "lengthSeconds": pick["seconds"]}
+            card = _video_card(s, v, "video", "Picked for you")
+            card.blurb = pick["reason"]
+            return card
     v = await _random_video(client, s, rng, s.invidious_topics)
     return _video_card(s, v, "video", "Video")
 

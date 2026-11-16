@@ -1,4 +1,4 @@
-package tv.liess.detour
+package tv.liess.liessure
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
@@ -22,7 +22,7 @@ import android.widget.Toast
 import kotlin.concurrent.thread
 
 /**
- * A thin shell around the Detour web app.
+ * A thin shell around the Liessure web app.
  *
  * What it adds over a browser tab:
  *  - it can be the handler for reddit.com links, so tapping one lands here;
@@ -34,14 +34,14 @@ import kotlin.concurrent.thread
 class MainActivity : Activity() {
 
     private lateinit var web: WebView
-    private val home: Uri by lazy { Uri.parse(BuildConfig.DETOUR_URL) }
+    private val home: Uri by lazy { Uri.parse(BuildConfig.LIESSURE_URL) }
 
     /** Hosts that stay inside the WebView; everything else goes to its own app. */
     private val inAppHosts: Set<String> by lazy {
         setOf(home.host.orEmpty(), "sso.liess.tv", "auth.liess.tv", "gatekeeper.liess.tv", "gatekeeper-lan.liess.tv")
     }
 
-    private val prefs by lazy { getSharedPreferences("detour", Context.MODE_PRIVATE) }
+    private val prefs by lazy { getSharedPreferences("liessure", Context.MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,10 +61,10 @@ class MainActivity : Activity() {
             javaScriptEnabled = true
             domStorageEnabled = true
             mediaPlaybackRequiresUserGesture = false
-            userAgentString = "$userAgentString DetourAndroid/${BuildConfig.VERSION_NAME}"
+            userAgentString = "$userAgentString LiessureAndroid/${BuildConfig.VERSION_NAME}"
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true) // Invidious embeds
-        web.addJavascriptInterface(Bridge(), "DetourAndroid")
+        web.addJavascriptInterface(Bridge(), "LiessureAndroid")
         web.webChromeClient = WebChromeClient()
         web.webViewClient = Client()
 
@@ -95,7 +95,7 @@ class MainActivity : Activity() {
 
     private fun isHome(url: String?): Boolean = url != null && Uri.parse(url).host == home.host
 
-    /** Open a link in whichever app claims it, never back into Detour itself. */
+    /** Open a link in whichever app claims it, never back into Liessure itself. */
     private fun openExternal(raw: String) {
         val uri = Uri.parse(raw)
         val intent = if (uri.scheme == "intent") {
@@ -125,7 +125,7 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Exposed to the page as window.DetourAndroid. Only honoured for our own origin. */
+    /** Exposed to the page as window.LiessureAndroid. Only honoured for our own origin. */
     inner class Bridge {
         @JavascriptInterface
         fun openUrl(url: String) = runOnUiThread { if (isHome(web.url)) openExternal(url) }
@@ -153,9 +153,9 @@ class MainActivity : Activity() {
             val html = """
                 <html><body style="background:#14161a;color:#eceae6;font-family:sans-serif;
                   display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh">
-                <p>Couldn't reach Detour.</p><p style="color:#9aa0a8;font-size:14px">${error.description}</p>
+                <p>Couldn't reach Liessure.</p><p style="color:#9aa0a8;font-size:14px">${error.description}</p>
                 <button style="font-size:16px;padding:10px 18px;border-radius:8px;border:0;background:#7cc4ad"
-                  onclick="DetourAndroid.retry()">Try again</button></body></html>
+                  onclick="LiessureAndroid.retry()">Try again</button></body></html>
             """.trimIndent()
             view.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
         }

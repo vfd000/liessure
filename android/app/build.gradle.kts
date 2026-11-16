@@ -3,32 +3,32 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val detourUrl: String = providers.gradleProperty("detourUrl").get()
+val liessureUrl: String = providers.gradleProperty("liessureUrl").get()
 
 // Release signing comes from CI secrets when present (so installs can be
 // updated in place); otherwise the build falls back to the debug key.
-val keystorePath: String? = System.getenv("DETOUR_KEYSTORE_PATH")
+val keystorePath: String? = System.getenv("LIESSURE_KEYSTORE_PATH")
 
 android {
-    namespace = "tv.liess.detour"
+    namespace = "tv.liess.liessure"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "tv.liess.detour"
+        applicationId = "tv.liess.liessure"
         minSdk = 26
         targetSdk = 35
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.1.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
-        buildConfigField("String", "DETOUR_URL", "\"$detourUrl\"")
+        buildConfigField("String", "LIESSURE_URL", "\"$liessureUrl\"")
     }
 
     signingConfigs {
         if (keystorePath != null) {
             create("release") {
                 storeFile = file(keystorePath)
-                storePassword = System.getenv("DETOUR_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("DETOUR_KEY_ALIAS")
-                keyPassword = System.getenv("DETOUR_KEY_PASSWORD")
+                storePassword = System.getenv("LIESSURE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("LIESSURE_KEY_ALIAS")
+                keyPassword = System.getenv("LIESSURE_KEY_PASSWORD")
             }
         }
     }
