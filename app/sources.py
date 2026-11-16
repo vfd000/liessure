@@ -95,8 +95,12 @@ def auth_headers_for(settings: Settings, url: str) -> dict[str, str] | None:
     if settings.romm.url and url.startswith(settings.romm.url + "/"):
         return _romm_headers(settings)
     if settings.invidious.url and url.startswith(settings.invidious.url + "/"):
-        return {}
+        return invidious_headers(settings)
     return None
+
+
+def invidious_headers(s: Settings) -> dict[str, str]:
+    return {"X-Watch-Token": s.invidious_watch_token} if s.invidious_watch_token else {}
 
 
 def _jellyfin_headers(s: Settings) -> dict[str, str]:
@@ -433,6 +437,7 @@ async def _invidious_search(client: httpx.AsyncClient, s: Settings, query: str, 
     r = await client.get(
         f"{s.invidious.url}/api/v1/search",
         params={"q": query, "type": "video", "page": page},
+        headers=invidious_headers(s),
     )
     r.raise_for_status()
     # Skip Shorts and clips: the point is to trade a scroll for something worth watching.

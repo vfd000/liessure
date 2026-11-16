@@ -149,6 +149,9 @@ class Settings:
 
     invidious: Service = field(default_factory=Service)
     invidious_topics: list[str] = field(default_factory=list)
+    # watch.liess.tv's SSO shim lets an app past the Zitadel gate with an
+    # X-Watch-Token from its watch-tokens.map (what Clipious uses).
+    invidious_watch_token: str = ""
     # Where "Open" goes for a YouTube video: "youtube" (the app) or "invidious".
     video_link: str = "youtube"
     nebula_feeds: list[str] = field(default_factory=list)
@@ -220,6 +223,7 @@ class Settings:
                     "|cooking|hiking|retro games|music live session|documental",
                 )
             ),
+            invidious_watch_token=_env("INVIDIOUS_WATCH_TOKEN"),
             video_link=_env("VIDEO_LINK", "youtube"),
             nebula_feeds=parse_list(_env("NEBULA_FEEDS", "https://rss.nebula.app/video.rss")),
             travel=svc("TRAVEL"),

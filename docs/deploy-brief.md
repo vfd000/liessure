@@ -61,10 +61,11 @@ activity.liess.tv and watch.liess.tv.
    - RomM: `games.liess.tv` (list 3, internal). The API takes a bearer
      token or basic auth. The axl/Dani accounts are SSO-created; a local
      password or a RomM client token may need minting. Ask axl which.
-   - Invidious: `watch.liess.tv` has an SSO shim (`docker/invidious/sso-shim.conf`)
-     and `161.fw` only admits NPM on 3000. Find a path for `/api/v1/*`
-     and `/vi/*` that skips the shim from this CT (a shim exception or a
-     firewall allowance). Don't open it to the world.
+   - Invidious: `watch.liess.tv`'s SSO shim lets an app past the gate with
+     an `X-Watch-Token` from `/opt/invidious/watch-tokens.map` (as Clipious
+     does); Liessure sends `INVIDIOUS_WATCH_TOKEN`. Mint one for axl the way
+     the invidious deploy minted Clipious's. Thumbnails need no token. No
+     firewall change.
    - LiteLLM: `https://llm.liess.tv` (LAN-only).
    - Travel: `https://travel.liess.tv` (list 3).
    - Graph: `https://graph.liess.tv` (list 3).
@@ -81,8 +82,8 @@ activity.liess.tv and watch.liess.tv.
    - `ROMM_TOKEN`, or `ROMM_USERNAME` (variable) + `ROMM_PASSWORD`
      (secret), read-only if RomM allows it. Variables: `ROMM_URL`,
      `ROMM_PUBLIC_URL=https://games.liess.tv`.
-   - Invidious variables: `INVIDIOUS_URL` (the server-side path from step
-     5), `INVIDIOUS_PUBLIC_URL=https://watch.liess.tv`.
+   - `INVIDIOUS_WATCH_TOKEN` (secret). Variables:
+     `INVIDIOUS_URL=https://watch.liess.tv` (and `INVIDIOUS_PUBLIC_URL` the same).
    - `LLM_KEY`: a LiteLLM virtual key scoped to `fast-haiku` only. It
      sends images (photo captions), so check the alias accepts
      `image_url` parts. Variable `LLM_URL=https://llm.liess.tv`.

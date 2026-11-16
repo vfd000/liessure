@@ -31,6 +31,7 @@ jobs:
       INVIDIOUS_URL: ${{ vars.INVIDIOUS_URL }}
       INVIDIOUS_PUBLIC_URL: ${{ vars.INVIDIOUS_PUBLIC_URL }}
       INVIDIOUS_TOPICS: ${{ vars.INVIDIOUS_TOPICS }}
+      INVIDIOUS_WATCH_TOKEN: ${{ secrets.INVIDIOUS_WATCH_TOKEN }}
       LLM_URL: ${{ vars.LLM_URL }}
       LLM_KEY: ${{ secrets.LLM_KEY }}
       LLM_MODEL: ${{ vars.LLM_MODEL }}

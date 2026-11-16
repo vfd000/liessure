@@ -73,8 +73,8 @@ class Cand:
 # --------------------------------------------------------------- gatherers
 
 
-async def _get(client: httpx.AsyncClient, url: str, **params: Any) -> Any:
-    r = await client.get(url, params=params or None)
+async def _get(client: httpx.AsyncClient, url: str, headers: dict[str, str] | None = None, **params: Any) -> Any:
+    r = await client.get(url, params=params or None, headers=headers)
     r.raise_for_status()
     return r.json()
 
@@ -107,15 +107,15 @@ async def _invidious(client, s, store, rng, kind: str, label: str, queries: list
                      channels: list[str], tag: str = "") -> list[Cand]:
     if not s.invidious.url:
         return []
-    base = s.invidious.url
+    base, h = s.invidious.url, sources.invidious_headers(s)
     jobs: list[tuple[str, Awaitable[Any]]] = []
     for q in queries:
-        jobs.append((f"search:{q}", _get(client, f"{base}/api/v1/search", q=q, type="video", page=rng.randint(1, 3))))
+        jobs.append((f"search:{q}", _get(client, f"{base}/api/v1/search", h, q=q, type="video", page=rng.randint(1, 3))))
     for ucid in channels:
-        jobs.append((f"channel:{ucid}", _get(client, f"{base}/api/v1/channels/{quote(ucid)}/videos")))
+        jobs.append((f"channel:{ucid}", _get(client, f"{base}/api/v1/channels/{quote(ucid)}/videos", h)))
     for vid in store.recent_refs(kind, 8):
         if VIDEO_ID.match(vid):
-            jobs.append((f"related:{vid}", _get(client, f"{base}/api/v1/videos/{vid}", fields="recommendedVideos")))
+            jobs.append((f"related:{vid}", _get(client, f"{base}/api/v1/videos/{vid}", h, fields="recommendedVideos")))
     out: list[Cand] = []
     for source, res in await _run(kind, jobs):
         if isinstance(res, dict):

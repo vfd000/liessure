@@ -103,6 +103,8 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
         roms = [{"id": 7 + n, "name": f"Zelda {n}", "platform_display_name": "SNES", "genres": ["Adventure"],
                  "path_cover_large": "roms/1/7/cover/big.png"} for n in range(limit)]
         return httpx.Response(200, json={"items": roms, "total": 40})
+    if host == "inv.test" and path.startswith("/api/") and request.headers.get("x-watch-token") not in (None, "wt"):
+        return httpx.Response(403)
     if host == "inv.test" and path == "/api/v1/search":
         return httpx.Response(200, json=[
             {"type": "video", "videoId": "short1aaaaa", "title": "short", "lengthSeconds": 30},
@@ -551,3 +553,16 @@ def test_noticed_interests_are_proposed_with_evidence_once_a_week():
     assert body["source_ref"] == "interest:Q123:2026-W47"
     assert body["quote"] == "Mount St. Helens; Glacier Peak; Mount Baker"
     assert cur is not None
+
+
+def test_invidious_calls_carry_the_watch_token():
+    seen = []
+
+    def handler(request):
+        if request.url.host == "inv.test":
+            seen.append(request.headers.get("x-watch-token"))
+        return fake_backend(request)
+    with make_client(full_settings(invidious_watch_token="wt", nebula_feeds=[]), handler) as c:
+        assert c.get("/api/card/video").status_code == 200
+        assert c.get("/img", params={"src": "http://inv.test/vi/x/mqdefault.jpg"}).status_code in (200, 502)
+    assert seen and all(t == "wt" for t in seen)
