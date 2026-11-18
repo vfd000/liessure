@@ -13,6 +13,7 @@
   <div id="ptr" class="ptr" aria-hidden="true">↓ Pull to refresh</div>
   <header class="top">
     <h1>Liessure</h1>
+    <button id="search" class="icon" aria-label="Search cards you've seen" title="Search cards you've seen">🔍</button>
     <button id="idea" class="icon" aria-label="Suggest an improvement" title="Suggest an improvement">💡</button>
     <button id="refresh" class="icon" aria-label="New feed" title="New feed">↻</button>
   </header>
@@ -30,6 +31,10 @@
     </form>
   </dialog>
   <div id="banner" class="banner" hidden>You were heading to Reddit. Here's something of yours instead.</div>
+  <div id="searchbar" class="searchbar" hidden>
+    <input id="q" type="search" placeholder="Search cards you've seen" autocomplete="off">
+    <button id="search-close" class="chip">✕</button>
+  </div>
   <nav id="chips" class="chips" aria-label="Filter"></nav>
   <main id="feed" class="feed" aria-live="polite"></main>
   <div id="sentinel" class="sentinel"><span class="spinner"></span></div>

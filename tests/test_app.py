@@ -1613,3 +1613,21 @@ def test_immich_preview_falls_back_to_thumbnail():
         r = c.get("/img", params={"src": f"{IM}/api/assets/p1/thumbnail?size=preview"})
     assert r.status_code == 200 and r.content == b"\xff\xd8small"
 
+
+def test_cards_shown_can_be_found_again():
+    with make_client(full_settings()) as c:
+        cards = c.get("/api/feed?n=8").json()["cards"]
+        assert cards
+        first = cards[0]
+        word = first["title"].split()[0]
+        found = c.get("/api/history", params={"q": word}).json()["cards"]
+        assert any(x["title"] == first["title"] for x in found)
+        assert c.get("/api/history", params={"q": "zzzz nothing like this"}).json()["cards"] == []
+        everything = c.get("/api/history").json()["cards"]
+        assert len(everything) == len({(x["kind"], x.get("ref") or x["url"]) for x in cards})
+    st = Store(":memory:")
+    st.HISTORY_MAX = 5
+    st.remember_shown([{"kind": "news", "ref": str(n), "title": f"Story {n}"} for n in range(9)])
+    assert [x["title"] for x in st.search_history("story")] == ["Story 8", "Story 7", "Story 6", "Story 5", "Story 4"]
+    assert st.search_history("100%") == []  # LIKE wildcards are literal
+
