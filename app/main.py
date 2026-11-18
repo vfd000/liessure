@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 import dataclasses
 
-from . import auth, avoid, curator, flashcards, lessons, profile, reader, sources
+from . import auth, avoid, curator, flashcards, lessons, lyrics, profile, reader, sources
 from .config import LESSON_LABELS
 from .config import KINDS, MAX_PER_LOAD, OWNER_ONLY_KINDS, RECALL_KINDS, Settings
 from .store import Store
@@ -778,6 +778,28 @@ def create_app(
                 return Response(r.content, media_type=ctype, headers={"Cache-Control": "private, max-age=86400"})
             log.warning("img %s: HTTP %s %s", url[:160], r.status_code, ctype)
         raise HTTPException(502, "image fetch failed")
+
+    lyrics_misses = sources._TTLCache(6 * 3600)  # songs nobody has lyrics for: not asked again for a while
+
+    @app.get("/api/lyrics/{item_id}")
+    async def song_lyrics(request: Request, item_id: str):
+        """A song's lyrics (Jellyfin's, else LRCLIB's), timed when synced. Kept once found."""
+        if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", item_id) or not (settings.jellyfin.url and settings.jellyfin_token):
+            raise HTTPException(404)
+        hit = store.get_meta("lyrics:" + item_id)
+        if hit:
+            return json.loads(hit)
+        if lyrics_misses.get(item_id):
+            return lyrics_misses.get(item_id)
+        try:
+            found = await lyrics.lyrics(request.app.state.client, settings, item_id)
+        except (httpx.HTTPError, ValueError) as e:
+            raise HTTPException(502, f"couldn't look the lyrics up: {type(e).__name__}")
+        if found["lines"]:
+            store.set_meta("lyrics:" + item_id, json.dumps(found))
+        else:
+            lyrics_misses.put(item_id, found)
+        return found
 
     @app.get("/stream/audio/{item_id}")
     async def stream_audio(request: Request, item_id: str):

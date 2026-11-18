@@ -1932,3 +1932,30 @@ def test_percent_hint_swaps_when_that_is_easier():
     assert mathgen.percent(Pick(88, 25)).solution == "88% of 25 = 25% of 88 = a quarter of 88 = 22."
     assert mathgen.percent(Pick(35, 480)).hint.startswith("Build it")  # nothing easier to swap to
     assert mathgen.percent(Pick(12.5, 40)).hint.startswith("Build it")
+
+
+def test_song_lyrics_from_lrclib_when_jellyfin_has_none():
+    from app import lyrics
+    assert lyrics.parse_lrc("[ar:Someone]\n[00:01.50] Hello\n[01:02.00]World") == [
+        {"t": 1.5, "text": "Hello"}, {"t": 62.0, "text": "World"}]
+    asked = []
+
+    def backend(request):
+        u = request.url
+        if u.host == "jellyfin.test" and u.path.endswith("/Lyrics"):
+            return httpx.Response(404)
+        if u.host == "jellyfin.test" and u.path == "/Items":
+            return httpx.Response(200, json={"Items": [{"Name": "Hello", "AlbumArtist": "Adele", "Album": "25",
+                                                        "RunTimeTicks": 2950000000}]})
+        if u.host == "lrclib.net":
+            asked.append((u.path, dict(u.params)))
+            return httpx.Response(200, json={"syncedLyrics": "[00:01.00] Hello, it's me", "plainLyrics": "Hello, it's me"})
+        return fake_backend(request)
+    s = full_settings(jellyfin=Service("http://jellyfin.test", "https://jellyfin.example"), jellyfin_token="jt")
+    with make_client(s, handler=backend) as c:
+        r = c.get("/api/lyrics/abc12345").json()
+        assert r["lines"] == [{"t": 1.0, "text": "Hello, it's me"}] and r["synced"] and r["source"] == "LRCLIB"
+        assert c.get("/api/lyrics/abc12345").json() == r  # kept: LRCLIB asked once
+        assert c.get("/api/lyrics/not-an-id!").status_code == 404
+    assert asked == [("/api/get", {"artist_name": "Adele", "track_name": "Hello", "album_name": "25", "duration": "295"})]
+

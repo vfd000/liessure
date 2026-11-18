@@ -32,6 +32,9 @@ const UI = {
     "On the To Do list": "En la lista", "Couldn't add it to the To Do list": "No se pudo añadir a la lista",
     "What is…?": "¿Qué es…?", "Not quite. Try again, or show the answer.": "Casi. Inténtalo otra vez o mira la respuesta.",
     "Answer": "Respuesta",
+    "Lyrics": "Letra", "Hide lyrics": "Ocultar letra", "Lyrics from": "Letra de",
+    "follows the song when you play it here": "sigue la canción si la reproduces aquí",
+    "No lyrics found for this song.": "No se encontró la letra.", "Couldn't get the lyrics right now.": "No se pudo cargar la letra.",
     "Map": "Mapa", "Hide map": "Ocultar mapa", "Open in Maps": "Abrir en Mapas",
     "approximate route (straight lines between places)": "ruta aproximada (líneas rectas entre lugares)",
     "Search cards you've seen": "Buscar tarjetas que ya viste", "Later": "Después", "Done": "Hecho",
@@ -248,6 +251,7 @@ function renderCard(c) {
     };
     actions.append(mapBtn);
   }
+  if (c.kind === "song" && c.ref) actions.append(lyricsButton(c, card, body, actions));
   if (CAN_TODO && c.kind !== "todo" && c.title) {
     // Onto the To Do list: to read up on it, or to build it.
     const td = el("button", "", "＋ " + t("To do"));
@@ -646,6 +650,53 @@ function speak({ text, lang, fallback }) {
   u.rate = 0.85;
   synth.cancel();
   synth.speak(u);
+}
+
+// Lyrics for a song card: synced ones follow the song playing in the card (tap a line to jump there).
+function lyricsButton(c, cardEl, body, actions) {
+  const b = el("button", "", "🎤 " + t("Lyrics"));
+  let box = null;
+  b.onclick = async () => {
+    if (box) { box.remove(); box = null; b.textContent = "🎤 " + t("Lyrics"); return; }
+    box = el("div", "lyrics");
+    box.append(el("p", "why", t("Loading…")));
+    body.insertBefore(box, actions);
+    b.textContent = t("Hide lyrics");
+    const shown = box;
+    let ly;
+    try {
+      const r = await fetch(`/api/lyrics/${encodeURIComponent(c.ref)}`);
+      if (!r.ok) throw new Error(r.status);
+      ly = await r.json();
+    } catch { if (shown === box) shown.replaceChildren(el("p", "why", t("Couldn't get the lyrics right now."))); return; }
+    if (shown !== box) return;
+    shown.replaceChildren();
+    if (!ly.lines.length) { shown.append(el("p", "why", t("No lyrics found for this song."))); return; }
+    const rows = ly.lines.map((l) => {
+      const p = el("p", "lyric", l.text || "♪");
+      if (ly.synced && l.t != null) {
+        p.onclick = () => { const a = cardEl.querySelector("audio"); if (a) { a.currentTime = l.t; a.play(); } };
+      }
+      shown.append(p);
+      return p;
+    });
+    shown.append(el("p", "why", `${t("Lyrics from")} ${ly.source}` + (ly.synced ? ` · ${t("follows the song when you play it here")}` : "")));
+    if (!ly.synced) return;
+    let current = -1;
+    cardEl.addEventListener("timeupdate", (e) => {
+      if (shown !== box || !(e.target instanceof HTMLAudioElement)) return;
+      let i = -1;
+      ly.lines.forEach((l, j) => { if (l.t != null && l.t <= e.target.currentTime + 0.2) i = j; });
+      if (i === current) return;
+      if (current >= 0) rows[current].classList.remove("now");
+      current = i;
+      if (i >= 0) {
+        rows[i].classList.add("now");
+        shown.scrollTo({ top: rows[i].offsetTop - shown.offsetTop - shown.clientHeight / 3, behavior: "smooth" });
+      }
+    }, true); // timeupdate doesn't bubble; capture catches it from the card's player
+  };
+  return b;
 }
 
 // Hand a photo to Claude: the Claude app (Android share), the share sheet (iPhone, other
