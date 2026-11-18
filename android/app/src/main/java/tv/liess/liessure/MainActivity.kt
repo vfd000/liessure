@@ -13,6 +13,8 @@ import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
 import android.util.Base64
 import androidx.core.content.FileProvider
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import java.io.File
 import android.security.KeyChain
 import android.view.WindowInsets
@@ -83,6 +85,11 @@ class MainActivity : Activity() {
             domStorageEnabled = true
             mediaPlaybackRequiresUserGesture = false
             userAgentString = "$userAgentString LiessureAndroid/${BuildConfig.VERSION_NAME}"
+        }
+        // Passkeys on the sign-in page (sso.liess.tv), where this WebView supports it. It only works because
+        // sso.liess.tv names this app in /.well-known/assetlinks.json; otherwise "Use password" still does.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_AUTHENTICATION)) {
+            WebSettingsCompat.setWebAuthenticationSupport(web.settings, WebSettingsCompat.WEB_AUTHENTICATION_SUPPORT_FOR_APP)
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true) // Invidious embeds
         web.addJavascriptInterface(Bridge(), "LiessureAndroid")

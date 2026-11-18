@@ -53,4 +53,9 @@ android {
 dependencies {
     // FileProvider: hand a photo to the Claude app (Ask Claude) without exposing a file path.
     implementation("androidx.core:core:1.13.1")
+    // Passkeys in the WebView (Zitadel's sign-in at sso.liess.tv): WebAuthn bridged to Credential Manager.
+    // sso.liess.tv has to vouch for this app in /.well-known/assetlinks.json.
+    implementation("androidx.webkit:webkit:1.14.0")
+    implementation("androidx.credentials:credentials:1.6.0-beta02")
+    implementation("androidx.credentials:credentials-play-services-auth:1.6.0-beta02")
 }

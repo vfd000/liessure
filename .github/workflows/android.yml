@@ -40,6 +40,19 @@ jobs:
           LIESSURE_KEY_PASSWORD: ${{ secrets.LIESSURE_KEY_PASSWORD }}
         run: ./gradlew --no-daemon assembleRelease
 
+      # The signing certificate's SHA-256 (public): what sso.liess.tv's /.well-known/assetlinks.json must name
+      # so passkeys work in the app's WebView.
+      - name: Signing certificate fingerprint
+        if: env.LIESSURE_KEYSTORE_PATH != ''
+        run: |
+          apksigner="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner"
+          fp="$("$apksigner" verify --print-certs android/app/build/outputs/apk/release/app-release.apk \
+            | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 | tr 'a-f' 'A-F' | sed 's/../&:/g; s/:$//')"
+          echo "LIESSURE_CERT_SHA256=$fp" >> "$GITHUB_ENV"
+          echo "### Signing certificate SHA-256" >> "$GITHUB_STEP_SUMMARY"
+          echo '`'"$fp"'`' >> "$GITHUB_STEP_SUMMARY"
+          echo "signing certificate SHA-256: $fp"
+
       - uses: actions/upload-artifact@v4
         with:
           name: liessure-apk
@@ -57,4 +70,5 @@ jobs:
           v="0.1.${GITHUB_RUN_NUMBER}"
           cp android/app/build/outputs/apk/release/app-release.apk "liessure-$v.apk"
           gh release create "v$v" "liessure-$v.apk" --target "$GITHUB_SHA" \
-            --title "Liessure $v" --notes "Android build from ${GITHUB_SHA::7}." --latest
+            --title "Liessure $v" --latest \
+            --notes "Android build from ${GITHUB_SHA::7}. Signing certificate SHA-256: ${LIESSURE_CERT_SHA256:-unknown}"
