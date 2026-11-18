@@ -71,6 +71,25 @@ the moment: short ones on the phone, longer ones in the evening. Ticking it
 off stays in the lists app; the card links, it doesn't act. Estimates are
 cached per item and redone only when the item's text changes.
 
+## Later: exercise cards
+
+A few minutes in the feed can be a few minutes of movement. Cards for: the
+physical-therapy routines axl is doing (shoulders, knees: the exercise, sets
+and reps, a short how-to video or picture, and what it's for), a short cardio
+block when there's a gap ("10 minutes: jumping jacks, high knees, star jumps"),
+and quick strength sets (push-ups, squats, planks, burpees). No service holds
+this yet; the household lists service has an "Exercises" list (id 15, tag
+fitness) that can seed it, and the activity tracker (`activity_tracker_oauth`)
+is where a finished set or session gets logged. Rules:
+- PT exercises come from what axl (or his physical therapist) put in, never
+  invented: the card shows the prescribed sets/reps, not a model's guess.
+- Favour what fits the moment: PT sets daily, cardio when there's time, none
+  late at night.
+- "Done" on the card logs to the activity tracker (the one card that acts,
+  because logging is the point); everything else links.
+- Later: progress (streaks per routine, how many days this week), and
+  prompting the next PT session when one is due.
+
 ## Later: job cards
 
 Cards from the household jobs service (vfd000/jobs, jobs.liess.tv): its

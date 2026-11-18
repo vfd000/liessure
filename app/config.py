@@ -247,6 +247,8 @@ class Settings:
     # Home Assistant (energy from the Enphase Envoy, the weather).
     ha: Service = field(default_factory=Service)
     ha_token: str = ""
+    # What a kWh is worth: PSE's effective rate, what solar saves (or earns back) per kWh.
+    home_energy_rate: float = 0.22
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -320,6 +322,7 @@ class Settings:
             grafana_prom_uid=_env("GRAFANA_PROM_UID", cls.grafana_prom_uid),
             ha=svc("HA"),
             ha_token=_env("HA_TOKEN"),
+            home_energy_rate=float(_env("HOME_ENERGY_RATE", "0.22")),
         )
 
 
