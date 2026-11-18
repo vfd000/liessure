@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import random
 import re
@@ -70,6 +71,10 @@ class FlashIn(BaseModel):
 
 
 class FromCard(BaseModel):
+    card: dict = Field(...)
+
+
+class RouteFor(BaseModel):
     card: dict = Field(...)
 
 
@@ -685,6 +690,28 @@ def create_app(
         deck = store.deck_by_name(name, user) or store.add_deck(name, user, source="feed")
         store.add_flashcards(deck, made, user)
         return {"deck": deck, "made": [{"front": f, "back": b} for f, b in made]}
+
+    @app.post("/api/geo/route")
+    async def geo_route(request: Request, body: RouteFor):
+        """The line a card's text describes ("the pipeline runs from A to B") as map points: the LLM names the
+        places, Nominatim finds them. Straight lines between them, so approximate. Cached per card text."""
+        c = body.card
+        title = str(c.get("title") or "")[:300]
+        text = " ".join(str(c.get(k) or "") for k in ("subtitle", "blurb"))[:3000]
+        if not settings.curator_enabled or not text.strip():
+            return {"points": []}
+        key = "route:" + hashlib.sha256(f"{title}\n{text}".encode()).hexdigest()[:32]
+        hit = store.get_meta(key)
+        if hit is not None:
+            return {"points": json.loads(hit)}
+        near = c.get("geo") if isinstance(c.get("geo"), dict) else None
+        try:
+            points = await curator.route_for(request.app.state.client, settings, title, text, near)
+        except (httpx.HTTPError, ValueError) as e:
+            log.warning("route for %r: %s", title, e)
+            return {"points": []}
+        store.set_meta(key, json.dumps(points))
+        return {"points": points}
 
     @app.get("/api/flashcards/next")
     async def next_flashcard(request: Request, decks: str = "", skip: str = ""):
