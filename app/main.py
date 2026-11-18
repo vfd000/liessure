@@ -17,7 +17,9 @@ from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel, Field
 
-from . import auth, curator, profile, reader, sources
+import dataclasses
+
+from . import auth, curator, lessons, profile, reader, sources
 from .config import KINDS, MAX_PER_LOAD, OWNER_ONLY_KINDS, RECALL_KINDS, Settings
 from .store import Store
 
@@ -174,12 +176,45 @@ def create_app(
 
     @app.get("/api/me")
     async def me(request: Request):
-        return {"user": request.state.user, "name": request.state.name, "owner": request.state.user == auth.OWNER,
-                "sso": sso is not None}
+        user = request.state.user
+        return {"user": user, "name": request.state.name, "owner": user == auth.OWNER,
+                "sso": sso is not None, "lang": prefs_for(user).get("lang", "en")}
+
+    def prefs_for(user: str) -> dict:
+        return settings.user_prefs.get(settings.owner_sub if user == auth.OWNER else user, {}) or {}
+
+    def settings_for(user: str) -> Settings:
+        """The settings a person's cards are made with: their reading language, news, interests and lessons."""
+        p = prefs_for(user)
+        if not p:
+            return settings
+        changes: dict = {}
+        if p.get("wikipedia"):
+            changes["wikipedia_lang"] = p["wikipedia"]
+        if p.get("news_feeds"):
+            changes["news_feeds"] = list(p["news_feeds"])
+        if p.get("interests"):
+            changes["wiki_interests"] = list(p["interests"])
+        if p.get("video_topics"):
+            changes["invidious_topics"] = list(p["video_topics"])
+        if p.get("learning"):
+            changes["languages_learning"] = [(x["name"], x["code"]) for x in p["learning"]]
+            changes["languages_curious"] = []
+        if p.get("lang_name") and p.get("lang"):
+            changes["languages_fluent"] = [(p["lang_name"], p["lang"])]
+        return dataclasses.replace(settings, **changes)
 
     def kinds_for(user: str) -> set[str]:
-        """The owner sees everything; others don't see cards built from the owner's own services."""
-        return set(KINDS) if user == auth.OWNER else set(KINDS) - OWNER_ONLY_KINDS
+        """The owner sees everything; others don't see cards built from the owner's own services,
+        nor kinds their preferences turn off. Lessons are for people with something to learn."""
+        p = prefs_for(user)
+        kinds = set(KINDS) if user == auth.OWNER else set(KINDS) - OWNER_ONLY_KINDS
+        kinds -= set(p.get("kinds_off") or [])
+        if not p.get("learning"):
+            kinds.discard("lesson")
+        if not p.get("career"):
+            kinds.discard("career")
+        return kinds
 
     async def one(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
         if kind not in kinds_for(user):
@@ -187,9 +222,15 @@ def create_app(
         if kind == "recall":
             row = store.due_recall(user)
             return sources.recall_card(row).to_dict() if row else None
+        if kind == "career":
+            return await own_career(client, user, rng)
+        if kind == "lesson":
+            return await lessons.card(client, settings_for(user), store, user, prefs_for(user), rng)
         if kind == "bite":
-            pick = store.take("bite", rng.random())
-            return pick["card"] if pick else None
+            if user == auth.OWNER:
+                pick = store.take("bite", rng.random())
+                return pick["card"] if pick else None
+            return await own_bite(client, user, rng)
         if kind == "todo":
             return await todo_card(client, rng)
         # Mostly the curated pool; a share of uncurated cards keeps some surprise in it.
@@ -204,12 +245,40 @@ def create_app(
                     card["url"] = curator.phrase_url(card["title"])
                 return card
         try:
-            s = await profiles.get(client)  # the graph's languages, home and interests, or the env fallback
+            # The owner's profile comes from the household graph; others from their preferences (for now).
+            s = await profiles.get(client) if user == auth.OWNER else settings_for(user)
             card = await asyncio.wait_for(sources.SOURCES[kind](client, s, rng), PER_CARD_TIMEOUT)
             return card.to_dict()
         except (sources.Unavailable, httpx.HTTPError, asyncio.TimeoutError, KeyError, ValueError, TypeError) as e:
             log.warning("source %s failed: %s: %s", kind, type(e).__name__, e)
             return None
+
+    async def own_bite(client: httpx.AsyncClient, user: str, rng: random.Random) -> dict | None:
+        """Bite-size cards from this person's interests, in their language, in their own pool."""
+        pool = f"bite:{user}"
+        pick = store.take(pool, rng.random())
+        if not pick and settings.curator_enabled:
+            s = settings_for(user)
+            try:
+                await curator.generate_bites(client, s, store, rng, topics=1, pool=pool,
+                                             write_in=prefs_for(user).get("lang_name", ""))
+            except httpx.HTTPError as e:
+                log.warning("bites for %s: %s", user, e)
+            pick = store.take(pool, rng.random())
+        return pick["card"] if pick else None
+
+    async def own_career(client: httpx.AsyncClient, user: str, rng: random.Random) -> dict | None:
+        """Careers this person is exploring, in their language, from their own pool."""
+        pool = f"career:{user}"
+        pick = store.take(pool, rng.random())
+        if not pick and settings.curator_enabled:
+            try:
+                await curator.generate_career_cards(client, settings_for(user), store, rng, pool,
+                                                    prefs_for(user)["career"], prefs_for(user).get("lang_name", ""))
+            except (httpx.HTTPError, KeyError) as e:
+                log.warning("careers for %s: %s", user, e)
+            pick = store.take(pool, rng.random())
+        return pick["card"] if pick else None
 
     async def todo_card(client: httpx.AsyncClient, rng: random.Random) -> dict | None:
         """An open to-do item that fits the moment, with how long it takes."""

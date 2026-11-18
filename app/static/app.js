@@ -4,9 +4,22 @@
 const LABELS = {
   wikipedia: "Wikipedia", news: "News", game: "Games", video: "Videos", movie: "Movies",
   show: "Series", song: "Music", photo: "Photos", language: "Telugu", homelab: "Home lab",
-  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size",
+  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers",
 };
 const android = window.LiessureAndroid || null; // injected by the Android app
+// The page's own words in the reader's language (/api/me's lang); cards carry their own.
+let UI_LANG = "en";
+const UI = {
+  es: {
+    "Open": "Abrir", "Details": "Detalles", "Hide details": "Ocultar", "Hide": "Ocultar", "Play here": "Reproducir",
+    "Everything": "Todo", "Check": "Comprobar", "Hint": "Pista", "Show answer": "Ver respuesta",
+    "Scratch pad": "Borrador", "Help me fix it": "Ayúdame", "Your answer": "Tu respuesta",
+    "Wikipedia": "Wikipedia", "News": "Noticias", "Videos": "Vídeos", "Movies": "Películas", "Series": "Series",
+    "Music": "Música", "Photos": "Fotos", "Math": "Mates", "Recall": "Repaso", "Bite-size": "Bocados",
+    "Lessons": "Lecciones", "Home": "Casa", "Languages": "Idiomas", "Careers": "Carreras",
+  },
+};
+const t = (s) => (UI[UI_LANG] && UI[UI_LANG][s]) || s;
 const feed = document.getElementById("feed");
 const sentinel = document.getElementById("sentinel");
 const chips = document.getElementById("chips");
@@ -150,17 +163,18 @@ function renderCard(c) {
       row.append(ident, claude);
       more.append(row, found);
     }
-    const toggle = el("button", "", "Details");
-    toggle.onclick = () => { more.hidden = !more.hidden; toggle.textContent = more.hidden ? "Details" : "Hide details"; };
+    const label = c.details_label || t("Details");
+    const toggle = el("button", "", label);
+    toggle.onclick = () => { more.hidden = !more.hidden; toggle.textContent = more.hidden ? label : t("Hide details"); };
     actions.append(toggle);
     body.append(more);
   }
   if (c.embed && c.embed.src) {
-    const play = el("button", "primary", "▶ " + (c.embed.label || "Play here"));
+    const play = el("button", "primary", "▶ " + (c.embed.label || t("Play here")));
     play.onclick = () => { playInline(card, c.embed); play.remove(); report(c, "play"); };
     actions.append(play);
   }
-  const go = el("a", (c.embed && c.embed.src) || c.quiz ? "" : "primary", c.open_label || "Open");
+  const go = el("a", (c.embed && c.embed.src) || c.quiz ? "" : "primary", c.open_label || t("Open"));
   go.href = c.url;
   go.target = "_blank";
   go.rel = "noopener";
@@ -318,11 +332,11 @@ function renderQuiz(c) {
     const input = el("input");
     input.type = "text";
     input.inputMode = "text";
-    input.placeholder = "Your answer";
+    input.placeholder = t("Your answer");
     input.autocomplete = "off";
-    const check = el("button", "primary", "Check");
-    const hint = el("button", "", "Hint");
-    const show = el("button", "", "Show answer");
+    const check = el("button", "primary", t("Check"));
+    const hint = el("button", "", t("Hint"));
+    const show = el("button", "", t("Show answer"));
     if (q.scratch) {
       const pad = el("button", "", "Scratch pad");
       pad.onclick = () => { pad.remove(); box.insertBefore(scratchPad(), result); };
@@ -478,12 +492,12 @@ function reset() {
 
 function renderChips() {
   chips.replaceChildren();
-  const all = el("button", "chip", "Everything");
+  const all = el("button", "chip", t("Everything"));
   all.setAttribute("aria-pressed", String(filter.size === 0));
   all.onclick = () => { filter.clear(); renderChips(); reset(); };
   chips.append(all);
   for (const k of configured) {
-    const b = el("button", "chip", LABELS[k] || k);
+    const b = el("button", "chip", t(LABELS[k] || k));
     b.setAttribute("aria-pressed", String(filter.has(k)));
     b.onclick = () => {
       filter.has(k) ? filter.delete(k) : filter.add(k);
@@ -581,11 +595,13 @@ new IntersectionObserver((entries) => {
   if (entries.some((e) => e.isIntersecting)) load();
 }, { rootMargin: "600px" }).observe(sentinel);
 
-fetch("/api/sources").then((r) => r.json()).then(({ language, sources }) => {
+const whoami = fetch("/api/me").then((r) => r.json()).then((me) => { UI_LANG = me.lang || "en"; return me; })
+  .catch(() => ({}));
+whoami.then(() => fetch("/api/sources")).then((r) => r.json()).then(({ language, sources }) => {
   configured = Object.keys(sources).filter((k) => sources[k].configured && sources[k].weight > 0);
   if (language) LABELS.language = language;
   renderChips();
 }).catch(() => {});
-load();
+whoami.then(() => load());
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

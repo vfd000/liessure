@@ -76,6 +76,10 @@ writing &amp; more.
 def fake_backend(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
     host, path, q = request.url.host, request.url.path, request.url.params
+    if host == "simple.wikipedia.org" and path == "/api/rest_v1/page/random/summary":
+        return httpx.Response(200, json={"type": "standard", "title": "Volcano",
+            "extract": "Volcanoes are openings in the ground. Hot rock comes out of them and builds mountains. " * 4,
+            "content_urls": {"mobile": {"page": "https://simple.m.wikipedia.org/wiki/Volcano"}}})
     if host.endswith("wikipedia.org") and path.startswith("/api/rest_v1/page/random"):
         return httpx.Response(200, json={
             "type": "standard", "title": "Lighthouse", "description": "tower",
@@ -275,7 +279,7 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind in ("recall", "todo", "bite"):
+        if kind in ("recall", "todo", "bite", "lesson", "career"):
             continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
@@ -1162,6 +1166,18 @@ def sign_in(c, who, sub):
     return c.get("/auth/callback", params={"code": "c0de", "state": q["state"][0]}, follow_redirects=False)
 
 
+# A made-up reader for the per-person tests (real preferences live only on the server).
+READER = "555000111"
+READER_PREFS = {
+    "lang": "es", "lang_name": "Spanish", "wikipedia": "es", "news_feeds": ["http://news.test/rss"],
+    "interests": ["Volcanes"], "video_topics": ["volcanes"],
+    "learning": [{"name": "English", "label": "Inglés", "code": "en", "style": "reading"},
+                 {"name": "Korean", "label": "Coreano", "code": "ko", "style": "beginner"}],
+    "kinds_off": ["homelab", "infosec"],
+    "career": {"now": "test pilot", "likes": ["Field A"], "explore": ["Field B"]},
+}
+
+
 def sso_settings(**kw):
     return full_settings(zitadel_issuer="https://sso.test", zitadel_client_id="cid", zitadel_client_secret="sec",
                          zitadel_user_subs=[AXL, DANI], public_url="https://liessure.example", **kw)
@@ -1179,7 +1195,7 @@ def test_sign_in_and_per_user_feeds():
         r = sign_in(c, who, AXL)
         assert r.status_code == 303 and "liessure_session" in r.headers["set-cookie"]
         assert "httponly" in r.headers["set-cookie"].lower() and "secure" in r.headers["set-cookie"].lower()
-        assert c.get("/api/me").json() == {"user": "owner", "name": "Axl", "owner": True, "sso": True}
+        assert c.get("/api/me").json() == {"user": "owner", "name": "Axl", "owner": True, "sso": True, "lang": "en"}
         assert c.get("/api/sources").json()["sources"]["job"]["configured"]
         c.post("/api/math", json={"ref": "m", "topic": "algebra", "correct": True})
 
@@ -1322,4 +1338,89 @@ def test_job_cards_expand_to_the_description(client):
     r = client.get(card["more"]["url"])
     assert r.status_code == 200 and r.json()["text"].startswith("About the role")
     assert client.get("/api/job/abc/description").status_code == 422
+
+
+def test_a_spanish_reader_gets_lessons(monkeypatch):
+    who = [READER]
+
+    async def ask(client, s, prompt, system=None):
+        if "Simple" in prompt or "comprehension" in prompt:
+            return json.dumps({"items": [{"id": i, "translation": "Los volcanes son aberturas en la tierra.",
+                                          "words": [{"word": "openings", "meaning": "aberturas"}]} for i in range(4)]})
+        if "beginner Korean" in prompt:
+            return json.dumps({"items": [{"text": "안녕하세요", "romanization": "annyeonghaseyo",
+                                          "translation": "Hola", "words": [{"word": "안녕", "romanization": "annyeong",
+                                                                            "meaning": "paz, bienestar"}],
+                                          "note": "Forma educada."}]})
+        if "Write the cards in Spanish" in prompt:
+            return json.dumps({"bites": [{"title": "Los volcanes duermen", "body": "Algunos pasan siglos sin erupción."}]})
+        return "{}"
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    s = sso_settings(llm_url="http://llm.test", llm_key="k", user_prefs={READER: READER_PREFS})
+    app = create_app(s, transport=httpx.MockTransport(sso_backend(who)), store=Store(":memory:"), run_curator=False)
+    with TestClient(app, base_url="https://testserver") as d:
+        app.state.sso.allowed.add(READER)
+        sign_in(d, who, READER)
+        assert d.get("/api/me").json()["lang"] == "es"
+        srcs = d.get("/api/sources").json()["sources"]
+        assert srcs["lesson"]["configured"] and not srcs["homelab"]["configured"] and not srcs["infosec"]["configured"]
+        seen = {}
+        for n in range(40):
+            r = d.get("/api/card/lesson")
+            if r.status_code == 200:  # a batch can run dry once its few cards have been shown
+                seen.setdefault(r.json()["label"], r.json())
+            if len(seen) == 2:
+                break
+        reading, phrase = seen["Inglés · lectura"], seen["Coreano · frase"]
+        assert reading["title"] == "Volcano" and reading["details_label"] == "Ver explicación"
+        assert {"label": "Traducción", "value": "Los volcanes son aberturas en la tierra."} in reading["details"]
+        assert {"label": "openings", "value": "aberturas"} in reading["details"]
+        assert phrase["title"] == "안녕하세요" and phrase["subtitle"] == "annyeonghaseyo"
+        assert {"label": "안녕 (annyeong)", "value": "paz, bienestar"} in phrase["details"]
+        assert phrase["actions"][0]["speak"]["lang"] == "ko-KR" and "tl=es" in phrase["url"]
+        bite = d.get("/api/card/bite").json()
+        assert bite["title"] == "Los volcanes duermen" and "es.m.wikipedia.org" in bite["url"]
+
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        assert a.get("/api/me").json()["lang"] == "en"
+        assert not a.get("/api/sources").json()["sources"]["lesson"]["configured"]  # axl has no lesson prefs
+
+
+def test_user_prefs_come_from_the_server_not_the_code(tmp_path):
+    from app.config import Settings, parse_user_prefs
+    assert Settings().user_prefs == {}  # no one's preferences are in the repo
+    f = tmp_path / "prefs.json"
+    f.write_text(json.dumps({"42": {"lang": "es", "kinds_off": ["infosec"]}}))
+    p = parse_user_prefs(json.dumps({"42": {"kinds_off": []}, "7": {"lang": "fr"}}), str(f))
+    assert p["42"] == {"lang": "es", "kinds_off": []} and p["7"] == {"lang": "fr"}
+    assert parse_user_prefs("not json", str(tmp_path / "missing.json")) == {}
+
+
+def test_career_exploration_cards(monkeypatch):
+    who = [READER]
+    seen = {}
+
+    async def ask(client, s, prompt, system=None):
+        if system == curator.CAREER_SYSTEM:
+            seen["prompt"] = prompt
+            return json.dumps({"cards": [
+                {"title": "Un día en la informática médica", "body": "Organizas datos clínicos."},
+                {"title": "Cómo se llega", "body": "Con estudios de salud y datos."},
+                {"title": "Lo que ya sabes te sirve", "body": "Sugerencia: el trato con pacientes."}]})
+        return "{}"
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    app = create_app(sso_settings(llm_url="http://llm.test", llm_key="k", user_prefs={READER: READER_PREFS}),
+                     transport=httpx.MockTransport(sso_backend(who)), store=Store(":memory:"), run_curator=False)
+    with TestClient(app, base_url="https://testserver") as d:
+        app.state.sso.allowed.add(READER)
+        sign_in(d, who, READER)
+        assert d.get("/api/sources").json()["sources"]["career"]["configured"]
+        card = d.get("/api/card/career").json()
+    assert card["kind"] == "career" and card["label"].split(" · ")[0] in ("Carreras", "Descubre")
+    assert "test pilot" in seen["prompt"] and "Write everything in Spanish" in seen["prompt"]
+    assert "Cascade Volcanoes" in seen["prompt"]  # the article text from the fake extracts API
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        assert not a.get("/api/sources").json()["sources"]["career"]["configured"]
 

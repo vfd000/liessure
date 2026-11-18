@@ -11,6 +11,7 @@ Each service has two URLs:
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -44,14 +45,54 @@ DEFAULT_WEIGHTS = {
     "todo": 2,
     "infosec": 2,
     "bite": 3,
+    "lesson": 3,
+    "career": 2,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
 RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite"})
+
+# Per-person preferences, keyed by Zitadel sub: what someone reads in, their interests, what they're
+# learning, careers they're exploring. They're personal, so they never live in this (public) repo: they
+# come from USER_PREFS_FILE (default /data/user-prefs.json, on the server's data volume) and USER_PREFS
+# (JSON, overrides the file). Shape of one entry:
+#   {"lang": "es", "lang_name": "Spanish", "wikipedia": "es", "news_feeds": [...], "interests": [...],
+#    "video_topics": [...], "learning": [{"name": "English", "label": "Inglés", "code": "en",
+#    "style": "reading" | "beginner"}], "kinds_off": [...],
+#    "career": {"now": "...", "likes": [...], "explore": [...]}, "labels": {...}}
+# Interests and languages move to the household graph with per-user curation.
+
+# The page's lesson labels in a reader's language (anything in prefs["labels"] overrides).
+LESSON_LABELS: dict[str, dict[str, str]] = {
+    "es": {"translation": "Traducción", "reading": "lectura", "phrase": "frase", "open": "Abrir",
+           "explain": "Ver explicación", "hear": "Escuchar", "note": "Nota", "translate": "Traducir",
+           "llm": "Escrito por el LLM: Traducir lo comprueba."},
+}
+
+
+def parse_user_prefs(raw: str, path: str = "") -> dict[str, dict]:
+    prefs: dict[str, dict] = {}
+    sources_: list[str] = []
+    if path:
+        try:
+            with open(path, encoding="utf-8") as f:
+                sources_.append(f.read())
+        except OSError:
+            pass
+    if raw:
+        sources_.append(raw)
+    for text in sources_:
+        try:
+            for sub, p in json.loads(text).items():
+                prefs[str(sub)] = {**prefs.get(str(sub), {}), **p}
+        except (ValueError, AttributeError):
+            pass
+    return prefs
+
 
 # Kinds only the owner sees: they read the owner's own services (jobs, lists, the lab).
 OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry"})
@@ -275,6 +316,7 @@ class Settings:
     zitadel_user_subs: list[str] = field(default_factory=list)
     # The person whose services Liessure reads and whose data predates multi-user (axl).
     owner_sub: str = "387450248433827843"
+    user_prefs: dict[str, dict] = field(default_factory=dict)
     public_url: str = "https://liessure.liess.tv"
 
     @property
@@ -370,6 +412,7 @@ class Settings:
             zitadel_client_secret=_env("ZITADEL_CLIENT_SECRET"),
             zitadel_user_subs=[x.strip() for x in _env("ZITADEL_USER_SUBS").split(",") if x.strip()],
             owner_sub=_env("OWNER_SUB", cls.owner_sub),
+            user_prefs=parse_user_prefs(_env("USER_PREFS"), _env("USER_PREFS_FILE", "/data/user-prefs.json")),
             public_url=_strip(_env("PUBLIC_URL", cls.public_url)),
             lists=svc("LISTS"),
             lists_token=_env("LISTS_TOKEN"),
