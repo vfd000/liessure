@@ -41,7 +41,9 @@ function el(tag, cls, text) {
   return e;
 }
 
+let lastCard = null; // the card last opened or played, offered as context for an idea
 function report(c, action) {
+  lastCard = c;
   if (!c.ref) return;
   const body = JSON.stringify({ kind: c.kind, ref: c.ref, action, title: c.title });
   fetch("/api/event", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
@@ -215,6 +217,45 @@ function renderChips() {
 }
 
 document.getElementById("refresh").onclick = reset;
+
+// Ideas: jot an improvement down without leaving the feed; they're kept on the server (/api/ideas).
+const ideas = document.getElementById("ideas");
+const ideaText = document.getElementById("idea-text");
+const ideaStatus = document.getElementById("idea-status");
+function showIdeas() {
+  const list = document.getElementById("idea-list");
+  fetch("/api/ideas").then((r) => r.json()).then(({ ideas: all }) => {
+    list.replaceChildren(...all.slice(0, 8).map((i) => el("li", i.status, i.text + (i.status !== "new" ? ` (${i.status})` : ""))));
+  }).catch(() => list.replaceChildren());
+}
+document.getElementById("idea").onclick = () => {
+  const row = document.getElementById("idea-about-row");
+  row.hidden = !lastCard;
+  if (lastCard) document.getElementById("idea-about-title").textContent = `${lastCard.label}: ${lastCard.title}`;
+  ideaStatus.hidden = true;
+  showIdeas();
+  ideas.showModal();
+  ideaText.focus();
+};
+document.getElementById("idea-close").onclick = () => ideas.close();
+document.getElementById("idea-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const text = ideaText.value.trim();
+  if (!text) return;
+  const about = lastCard && document.getElementById("idea-about").checked
+    ? `${lastCard.kind}: ${lastCard.title}` : "";
+  ideaStatus.hidden = false;
+  try {
+    const r = await fetch("/api/ideas", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, about }) });
+    if (!r.ok) throw new Error(r.status);
+    ideaText.value = "";
+    ideaStatus.textContent = "Saved. It's on the list to build.";
+    showIdeas();
+  } catch {
+    ideaStatus.textContent = "Couldn't save it (offline?). Your text is still here.";
+  }
+};
 addEventListener("online", () => { if (offline) reset(); });
 new IntersectionObserver((entries) => {
   if (entries.some((e) => e.isIntersecting)) load();

@@ -12,8 +12,22 @@
 <body>
   <header class="top">
     <h1>Liessure</h1>
+    <button id="idea" class="icon" aria-label="Suggest an improvement" title="Suggest an improvement">💡</button>
     <button id="refresh" class="icon" aria-label="New feed" title="New feed">↻</button>
   </header>
+  <dialog id="ideas" class="ideas">
+    <form method="dialog" id="idea-form">
+      <h2>An idea for Liessure</h2>
+      <textarea id="idea-text" rows="4" maxlength="4000" placeholder="What should it do better?" required></textarea>
+      <label id="idea-about-row" hidden><input type="checkbox" id="idea-about" checked> About <span id="idea-about-title"></span></label>
+      <div class="actions">
+        <button type="submit" class="primary" id="idea-send">Save idea</button>
+        <button type="button" id="idea-close">Close</button>
+      </div>
+      <p id="idea-status" class="why" hidden></p>
+      <ul id="idea-list" class="idea-list"></ul>
+    </form>
+  </dialog>
   <div id="banner" class="banner" hidden>You were heading to Reddit. Here's something of yours instead.</div>
   <nav id="chips" class="chips" aria-label="Filter"></nav>
   <main id="feed" class="feed" aria-live="polite"></main>

@@ -34,6 +34,13 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_kind_ts ON events (kind, ts);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ideas (
+    id      INTEGER PRIMARY KEY,
+    ts      REAL NOT NULL,
+    text    TEXT NOT NULL,
+    about   TEXT NOT NULL DEFAULT '',   -- the card it was about, "kind: title", if any
+    status  TEXT NOT NULL DEFAULT 'new' -- new | planned | done | dropped
+);
 CREATE TABLE IF NOT EXISTS rejected (
     kind TEXT NOT NULL, ref TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (kind, ref)
 );
@@ -53,6 +60,23 @@ class Store:
         self._lock = threading.Lock()
         with self._lock:
             self._db.executescript(SCHEMA)
+
+    # --- ideas: improvements jotted down in the app, to build later
+    def add_idea(self, text: str, about: str = "") -> int:
+        with self._lock, self._db:
+            cur = self._db.execute("INSERT INTO ideas (ts, text, about) VALUES (?, ?, ?)",
+                                   (time.time(), text, about))
+        return int(cur.lastrowid)
+
+    def ideas(self, limit: int = 200) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM ideas ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_idea_status(self, idea_id: int, status: str) -> bool:
+        with self._lock, self._db:
+            cur = self._db.execute("UPDATE ideas SET status = ? WHERE id = ?", (status, idea_id))
+        return cur.rowcount == 1
 
     # --- events
     def record(self, kind: str, ref: str, action: str, title: str = "") -> None:
