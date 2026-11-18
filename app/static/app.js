@@ -47,8 +47,10 @@ function report(c, action) {
   fetch("/api/event", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
 }
 
-function openUrl(url) {
-  if (android) android.openUrl(url);
+function openUrl(url, inApp) {
+  // Jellyfin's phone app takes no deep links, so the Android app shows its web page itself.
+  if (android && inApp && android.openInApp) android.openInApp(url);
+  else if (android) android.openUrl(url);
   else window.open(url, "_blank", "noopener");
 }
 
@@ -83,26 +85,31 @@ function renderCard(c) {
   go.href = c.url;
   go.target = "_blank";
   go.rel = "noopener";
-  go.onclick = (e) => { e.preventDefault(); report(c, "open"); openUrl(c.url); };
+  go.onclick = (e) => { e.preventDefault(); report(c, "open"); openUrl(c.url, c.open_in_app); };
   actions.append(go);
   for (const a of c.actions || []) {
     if (a.app) {
       if (!android) continue; // app launch only makes sense on the phone
       const b = el("button", "", a.label);
-      b.onclick = () => android.launchApp(a.app);
+      b.onclick = () => {
+        if (a.song && android.playSong) {
+          android.playSong(a.app, a.song.title || "", a.song.artist || "", a.song.album || "");
+          report(c, "play");
+        } else android.launchApp(a.app);
+      };
       actions.append(b);
     } else if (a.url) {
       if (a.android && !android) continue; // e.g. argosy:// only means something on the phone
       const l = el("a", "", a.label);
       l.href = a.url;
-      l.onclick = (e) => { e.preventDefault(); openUrl(a.url); };
+      l.onclick = (e) => { e.preventDefault(); openUrl(a.url, a.in_app); };
       actions.append(l);
     }
   }
   body.append(actions);
   card.append(body);
 
-  if (c.image) card.querySelector(".media").onclick = () => { report(c, "open"); openUrl(c.url); };
+  if (c.image) card.querySelector(".media").onclick = () => { report(c, "open"); openUrl(c.url, c.open_in_app); };
   return card;
 }
 

@@ -51,6 +51,8 @@ class Card:
     ref: str = ""
     # Set when the card came from the LLM-curated pool: why it was picked for you.
     why: str = ""
+    # The Android app opens `url` inside itself (Jellyfin's web UI: its phone app takes no deep links).
+    open_in_app: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -225,6 +227,7 @@ async def _jellyfin_video(
         url=_jellyfin_link(s, item),
         embed=_trailer_embed(s, item),
         ref=item["Id"],
+        open_in_app=True,
     )
 
 
@@ -268,13 +271,14 @@ def song_card(s: Settings, item: dict[str, Any]) -> Card:
         image = _jellyfin_image(s, item["AlbumId"])
     else:
         image = ""
-    actions = []
+    actions: list[dict[str, Any]] = []
     if s.music_app_package:
-        actions.append({"label": f"Open {s.music_app_name}", "app": s.music_app_package})
+        # The phone starts this song in the music app (Symfonium's API, or a play-from-search intent).
+        actions.append({"label": f"Play in {s.music_app_name}", "app": s.music_app_package,
+                        "song": {"title": item.get("Name") or "", "artist": artist, "album": item.get("Album") or ""}})
     if item.get("AlbumId"):
-        actions.append(
-            {"label": "Album", "url": _jellyfin_link(s, {"Id": item["AlbumId"], "ServerId": item.get("ServerId")})}
-        )
+        actions.append({"label": "Album", "in_app": "1",
+                        "url": _jellyfin_link(s, {"Id": item["AlbumId"], "ServerId": item.get("ServerId")})})
     return Card(
         kind="song",
         label="Song",
@@ -285,6 +289,7 @@ def song_card(s: Settings, item: dict[str, Any]) -> Card:
         actions=actions,
         embed={"type": "audio", "label": "Play here", "src": f"/stream/audio/{item['Id']}"},
         ref=item["Id"],
+        open_in_app=True,
     )
 
 

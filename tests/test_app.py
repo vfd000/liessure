@@ -229,7 +229,10 @@ def test_language_cards_cover_every_learning_language(client):
 
 def test_song_offers_music_app(client):
     song = client.get("/api/card/song").json()
-    assert {"label": "Open Symfonium", "app": "app.symfonik.music.player"} in song["actions"]
+    assert {"label": "Play in Symfonium", "app": "app.symfonik.music.player",
+            "song": {"title": "A Audio", "artist": "Band", "album": "LP"}} in song["actions"]
+    assert song["open_in_app"] and client.get("/api/card/movie").json()["open_in_app"]
+    assert not client.get("/api/card/news").json()["open_in_app"]
 
 
 def test_feed(client):
