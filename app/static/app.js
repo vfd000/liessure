@@ -473,6 +473,39 @@ function renderChips() {
 
 document.getElementById("refresh").onclick = reset;
 
+// Pull down at the top for a fresh feed (the ↻ button does the same). Safari tabs already reload on a
+// pull, so this is for the Android app and home-screen web apps.
+(() => {
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  if (!android && !standalone) return;
+  const ptr = document.getElementById("ptr");
+  const NEED = 70;
+  let startY = null, pulled = 0;
+  const show = (d) => {
+    ptr.style.transform = `translateY(${Math.min(d, 90) - 50}px)`;
+    ptr.style.opacity = String(Math.min(d / NEED, 1));
+    ptr.textContent = d >= NEED ? "↻ Release to refresh" : "↓ Pull to refresh";
+  };
+  addEventListener("touchstart", (e) => {
+    // Not from things that scroll or draw sideways (code blocks, the math scratch pad).
+    startY = scrollY <= 0 && !e.target.closest("canvas, pre, input, textarea") ? e.touches[0].clientY : null;
+    pulled = 0;
+  }, { passive: true });
+  addEventListener("touchmove", (e) => {
+    if (startY === null) return;
+    pulled = (e.touches[0].clientY - startY) * 0.5;
+    if (pulled > 0 && scrollY <= 0) show(pulled); else { pulled = 0; show(0); }
+  }, { passive: true });
+  addEventListener("touchend", () => {
+    if (startY !== null && pulled >= NEED) reset();
+    startY = null;
+    pulled = 0;
+    ptr.style.transition = "transform .2s, opacity .2s";
+    show(0);
+    setTimeout(() => { ptr.style.transition = ""; }, 220);
+  }, { passive: true });
+})();
+
 // Signed in with SSO: say who, and offer sign-out.
 fetch("/api/me").then((r) => r.json()).then((me) => {
   if (!me.sso) return;
