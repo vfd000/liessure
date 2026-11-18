@@ -33,6 +33,15 @@ feed, so a fresh deploy shows Wikipedia and language cards only.
 | `photo` | Immich `search/random`, or a today's memory about a third of the time | `IMMICH_URL`, `IMMICH_API_KEY` (read scopes only) |
 | `news` | RSS/Atom: Seattle Times, NPR, BBC World, Guardian Science, Ars Technica, HN best by default; last 72 h | `NEWS_FEEDS` (`a|b|c`), `NEWS_MAX_AGE_HOURS` |
 | `language` | For a language you're learning (the first twice as often): practice drill, its Wikipedia, learner videos, Lingopie, dictionaries and pronunciation | `LANGUAGES_LEARNING`, `LANGUAGE_PRACTICE_URL`, `LINGOPIE_URL` |
+| `homelab` | The tech in your lab (Wikipedia, from a list), home-lab build and design write-ups (ServeTheHome, selfh.st, Jeff Geerling, noted.lol, Lawrence Systems, Home Assistant blog; last 30 days) and videos | `HOMELAB_STACK`, `HOMELAB_FEEDS`, `HOMELAB_TOPICS`, `HOMELAB_MAX_AGE_DAYS` |
+| `job` | Jobs service: a new top match, or an application with a step due within two days. Weekends: due steps only | `JOBS_URL`, `JOBS_TOKEN` (its `MCP_API_TOKEN`), `JOBS_MIN_SCORE` (70) |
+| `skill` | What your top job matches keep asking for that the resume doesn't show (the scorer's gaps), most asked first, with a lesson to watch in place | same as `job` |
+| `telemetry` | "Lab health": a firing or pending Grafana alert, else a trend (fullest disk, oldest backup, next cert expiry, warmest drive, LLM spend) | `GRAFANA_URL`, `GRAFANA_TOKEN` (Viewer service account), `GRAFANA_PROM_UID` |
+| `home` | Home Assistant: today's solar against yesterday and the house's use (from the Envoy's lifetime counters), the weather | `HA_URL`, `HA_TOKEN` |
+
+`job`, `skill`, `telemetry` and `home` appear at most once per feed load, and
+their titles never go to the curator or the weekly interest proposals (job
+text is scraped from the web; the others say nothing about your taste).
 
 **Videos:** "Open" goes to the YouTube app by default (`VIDEO_LINK=youtube`),
 with an Invidious button beside it; `VIDEO_LINK=invidious` swaps them once
@@ -62,6 +71,18 @@ inline Invidious embed. "Open" goes to the real thing.
 
 Credentials stay server-side. Images from household services go through
 `/img`, which only fetches from the configured service bases.
+
+**Offline.** The feed is fetched fresh whenever the network answers. The
+page keeps the last 60 cards it was sent (localStorage); when a fetch fails
+it shows the ones not already on screen under an "offline" note, and
+refreshes once the connection is back. The service worker keeps the page
+itself and the last 120 household images; the Android app falls back to its
+WebView cache before the service worker is installed. Inline players and
+links still need the network.
+
+**Ideas.** 💡 in the header jots down an improvement (with the card you last
+opened as context, if you like). They're kept in Liessure's database:
+`GET /api/ideas` lists them for a later session to build from.
 
 ## Profile (household graph)
 
@@ -141,6 +162,8 @@ the `liessure-data` volume.
 - `GET /api/sources` — which kinds are configured, curator pool size
 - `POST /api/event` — `{kind, ref, action: open|play, title}`
 - `POST /api/curate[?kind=video]` — run a curation pass now
+- `POST /api/ideas` — `{text, about}`; `GET /api/ideas[?status=new]`;
+  `POST /api/ideas/{id}/status` — `{status: new|planned|done|dropped}`
 - `GET /healthz`
 
 ## Run locally
@@ -193,6 +216,13 @@ tagged `v0.1.<run>` with the APK attached, which is what **Obtainium** tracks.
 - Obtainium: add the repo URL. The repo is private, so give Obtainium a
   fine-grained GitHub token with read-only Contents on this repo.
 - The web app URL is baked in from `android/gradle.properties` (`liessureUrl`).
+- **Jellyfin:** its phone app has no deep links (no VIEW intent filter; it
+  always opens the server root), so "Open" on a movie, series or song shows
+  Jellyfin's own item page inside Liessure. Back returns to the feed.
+- **Songs:** "Play in Symfonium" starts that song through Symfonium's API
+  (the `app.symfonium.api.MEDIA_START` broadcast, by title, artist and
+  album) and brings the app up. Another `MUSIC_APP_PACKAGE` gets Android's
+  play-from-search intent.
 - **Catching Reddit links:** Settings → Apps → Liessure → Open by default →
   Add link → tick the reddit hosts. (Reddit's own app, if installed, has to
   be uninstalled or have its link handling turned off.) Then put Liessure where
