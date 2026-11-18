@@ -11,6 +11,9 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
+import android.util.Base64
+import androidx.core.content.FileProvider
+import java.io.File
 import android.security.KeyChain
 import android.view.WindowInsets
 import android.webkit.ClientCertRequest
@@ -215,6 +218,34 @@ class MainActivity : Activity() {
         }
     }
 
+    /** web.url must be read on the UI thread; JavascriptInterface methods run on another one. */
+    private fun isHomeOnUi(): Boolean {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var ok = false
+        runOnUiThread { ok = isHome(web.url); latch.countDown() }
+        latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+        return ok
+    }
+
+    private fun shareImage(bytes: ByteArray, mime: String, text: String) {
+        val dir = File(cacheDir, "shared").apply { mkdirs() }
+        val file = File(dir, if (mime == "image/png") "photo.png" else "photo.jpg")
+        file.writeBytes(bytes)
+        val uri = FileProvider.getUriForFile(this, "tv.liess.liessure.files", file)
+        val send = Intent(Intent.ACTION_SEND)
+            .setType(mime)
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .putExtra(Intent.EXTRA_TEXT, text)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val claude = Intent(send).setPackage(CLAUDE)
+        val target = if (claude.resolveActivity(packageManager) != null) claude else Intent.createChooser(send, "Ask about this photo")
+        try {
+            startActivity(target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "Nothing on this phone takes a shared photo", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     /** Exposed to the page as window.LiessureAndroid. Only honoured for our own origin. */
     inner class Bridge {
         @JavascriptInterface
@@ -236,6 +267,14 @@ class MainActivity : Activity() {
                 visiting.add(uri.host!!)
                 web.loadUrl(url)
             }
+        }
+
+        /** Ask Claude about a photo: the image (base64 from the page) shared into the Claude app. */
+        @JavascriptInterface
+        fun shareImage(base64: String, mime: String, text: String) {
+            if (!isHomeOnUi() || base64.length > 20_000_000 || !mime.startsWith("image/")) return
+            val bytes = runCatching { Base64.decode(base64, Base64.DEFAULT) }.getOrNull() ?: return
+            runOnUiThread { this@MainActivity.shareImage(bytes, mime, text) }
         }
 
         /** Say a phrase card aloud with the phone's text-to-speech. */
@@ -326,6 +365,7 @@ class MainActivity : Activity() {
 
     private companion object {
         const val SYMFONIUM = "app.symfonik.music.player"
+        const val CLAUDE = "com.anthropic.claude"
         val OFFLINE_ERRORS = setOf(
             WebViewClient.ERROR_HOST_LOOKUP, WebViewClient.ERROR_CONNECT, WebViewClient.ERROR_TIMEOUT,
         )

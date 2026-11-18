@@ -49,3 +49,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
+
+dependencies {
+    // FileProvider: hand a photo to the Claude app (Ask Claude) without exposing a file path.
+    implementation("androidx.core:core:1.13.1")
+}

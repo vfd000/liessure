@@ -57,6 +57,10 @@ class Card:
     open_in_app: bool = False
     # What the link button says, when "Open" would mislead (a math card's topic page is background reading).
     open_label: str = ""
+    # Shown under a "Details" button: [{"label", "value"}] rows, and {"label", "url"} links.
+    details: list[dict[str, str]] = field(default_factory=list)
+    # A photo the page can ask about (Identify, Ask Claude): {"id", "when", "place", "lat", "lon"}.
+    photo: dict[str, Any] = field(default_factory=dict)
     # Something to answer in place. Typed: {"answer", "tolerance", "hint", "solution"};
     # multiple choice: {"id", "choices", "answer" (index), "solution"}.
     quiz: dict[str, Any] = field(default_factory=dict)
@@ -303,6 +307,53 @@ def song_card(s: Settings, item: dict[str, Any]) -> Card:
 # ------------------------------------------------------------------- immich
 
 
+def _num(v: Any) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def photo_details(asset: dict[str, Any]) -> list[dict[str, str]]:
+    """When, where, with what: the photo's own metadata, plus a map and what's nearby."""
+    exif = asset.get("exifInfo") or {}
+    rows: list[dict[str, str]] = []
+    taken = asset.get("localDateTime") or exif.get("dateTimeOriginal") or asset.get("fileCreatedAt") or ""
+    try:
+        rows.append({"label": "Taken", "value": datetime.fromisoformat(taken.replace("Z", "+00:00"))
+                     .strftime("%a %-d %b %Y, %H:%M")})
+    except ValueError:
+        pass
+    place = ", ".join(x for x in (exif.get("city"), exif.get("state"), exif.get("country")) if x)
+    if place:
+        rows.append({"label": "Where", "value": place})
+    lat, lon = _num(exif.get("latitude")), _num(exif.get("longitude"))
+    if lat is not None and lon is not None:
+        rows.append({"label": "Coordinates", "value": f"{lat:.5f}, {lon:.5f}"})
+    camera = " ".join(x for x in (exif.get("make"), exif.get("model")) if x)
+    if camera:
+        rows.append({"label": "Camera", "value": camera})
+    if exif.get("lensModel"):
+        rows.append({"label": "Lens", "value": str(exif["lensModel"])})
+    shot = []
+    if _num(exif.get("fNumber")):
+        shot.append(f"f/{_num(exif['fNumber']):g}")
+    if exif.get("exposureTime"):
+        shot.append(f"{exif['exposureTime']} s")
+    if exif.get("iso"):
+        shot.append(f"ISO {exif['iso']}")
+    if _num(exif.get("focalLength")):
+        shot.append(f"{_num(exif['focalLength']):g} mm")
+    if shot:
+        rows.append({"label": "Exposure", "value": " · ".join(shot)})
+    if exif.get("exifImageWidth") and exif.get("exifImageHeight"):
+        rows.append({"label": "Size", "value": f"{exif['exifImageWidth']} × {exif['exifImageHeight']}"})
+    if lat is not None and lon is not None:
+        rows.append({"label": "Map", "url": f"https://www.openstreetmap.org/?mlat={lat:.5f}&mlon={lon:.5f}#map=15/{lat:.5f}/{lon:.5f}"})
+        rows.append({"label": "What's nearby", "url": f"https://en.m.wikipedia.org/wiki/Special:Nearby#/coord/{lat:.5f},{lon:.5f}"})
+    return rows
+
+
 def _immich_card(s: Settings, asset: dict[str, Any], subtitle: str) -> Card:
     exif = asset.get("exifInfo") or {}
     place = ", ".join(x for x in (exif.get("city"), exif.get("state"), exif.get("country")) if x)
@@ -317,6 +368,9 @@ def _immich_card(s: Settings, asset: dict[str, Any], subtitle: str) -> Card:
         image=proxied(f"{s.immich.url}/api/assets/{asset['id']}/thumbnail?size=preview"),
         url=f"{s.immich.link_base}/photos/{asset['id']}",
         ref=asset["id"],
+        details=photo_details(asset),
+        photo={"id": asset["id"], "when": when, "place": place,
+               "lat": _num(exif.get("latitude")), "lon": _num(exif.get("longitude"))},
     )
 
 

@@ -611,6 +611,31 @@ def code_for_label(s: Settings, label: str) -> str:
     return ""
 
 
+# ------------------------------------------------------------------ photos
+
+IDENTIFY_SYSTEM = """You look at one photo for the person who took it and say what's in it: landmarks \
+and buildings, plants, animals, food, signs, vehicles, the kind of place. Use the date and location \
+given as hints, and say how sure you are about each identification. Plain text, under 120 words."""
+
+_identified: dict[str, str] = {}
+
+
+async def identify_photo(client: httpx.AsyncClient, s: Settings, asset_id: str, ask=None) -> str:
+    """What's in an Immich photo, from the vision model; cached per photo for the life of the process."""
+    if asset_id in _identified:
+        return _identified[asset_id]
+    r = await client.get(f"{s.immich.url}/api/assets/{asset_id}", headers={"x-api-key": s.immich_api_key})
+    r.raise_for_status()
+    asset = r.json()
+    hints = "; ".join(f"{d['label']}: {d['value']}" for d in sources.photo_details(asset) if "value" in d)
+    image = await _thumb_data_uri(client, s, asset_id)
+    parts = [{"type": "text", "text": f"What's in this photo? {hints}"},
+             {"type": "image_url", "image_url": {"url": image}}]
+    text = (await (ask or ask_llm)(client, s, parts, system=IDENTIFY_SYSTEM)).strip()
+    _identified[asset_id] = text
+    return text
+
+
 # --------------------------------------------------------------------- math
 
 MATH_HELP_SYSTEM = """You are a patient math tutor. A learner got a problem wrong. Show them how to fix \

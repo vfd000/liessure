@@ -15,6 +15,11 @@
             <data android:scheme="https" />
         </intent>
         <intent>
+            <!-- Ask Claude: find apps (Claude first) that take a shared photo -->
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="image/*" />
+        </intent>
+        <intent>
             <!-- Android 11+: find the text-to-speech engine that reads phrase cards aloud -->
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
@@ -31,6 +36,16 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/Theme.Liessure"
         android:supportsRtl="true">
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="tv.liess.liessure.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/shared_files" />
+        </provider>
 
         <activity
             android:name=".MainActivity"
