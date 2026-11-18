@@ -222,7 +222,25 @@ def create_app(
             changes["languages_curious"] = []
         if p.get("lang_name") and p.get("lang"):
             changes["languages_fluent"] = [(p["lang_name"], p["lang"])]
+            if p["lang"] != "en":
+                changes["reply_lang"] = p["lang_name"]
+        if p.get("learning"):
+            # Lessons are their way into a new language; a whole Wikipedia article in it is a wall of text.
+            changes["language_wiki"] = False
+        if user != auth.OWNER:
+            # The owner's own practice links (drill app, Lingopie) aren't theirs.
+            changes["language_practice_url"] = ""
+            changes["lingopie_url"] = ""
         return dataclasses.replace(settings, **changes)
+
+    def lesson_prefs(user: str, s: Settings) -> dict:
+        """Their lesson preferences, or beginner lessons (explained in English) in the languages their
+        profile says they're learning."""
+        p = prefs_for(user)
+        if p.get("learning"):
+            return p
+        return {**p, "lang": p.get("lang", "en"), "lang_name": p.get("lang_name", "English"),
+                "learning": [{"name": n, "code": c, "style": "beginner"} for n, c in s.languages_learning]}
 
     def kinds_for(user: str) -> set[str]:
         """The owner sees everything; others don't see cards built from the owner's own services,
@@ -230,7 +248,7 @@ def create_app(
         p = prefs_for(user)
         kinds = set(KINDS) if user == auth.OWNER else set(KINDS) - OWNER_ONLY_KINDS
         kinds -= set(p.get("kinds_off") or [])
-        if not p.get("learning"):
+        if not (p.get("learning") or (user == auth.OWNER and settings.languages_learning)):
             kinds.discard("lesson")
         if not p.get("career"):
             kinds.discard("career")
@@ -245,7 +263,8 @@ def create_app(
         if kind == "career":
             return await own_career(client, user, rng)
         if kind == "lesson":
-            return await lessons.card(client, settings_for(user), store, user, prefs_for(user), rng)
+            s = await profiles.get(client) if user == auth.OWNER else settings_for(user)
+            return await lessons.card(client, s, store, user, lesson_prefs(user, s), rng)
         if kind == "bite":
             if user == auth.OWNER:
                 pick = store.take("bite", rng.random())
@@ -403,7 +422,7 @@ def create_app(
         if not (settings.curator_enabled and settings.immich.url and settings.immich_api_key):
             raise HTTPException(409, "needs the LLM and Immich")
         try:
-            text = await curator.identify_photo(request.app.state.client, settings, asset_id)
+            text = await curator.identify_photo(request.app.state.client, settings_for(request.state.user), asset_id)
         except httpx.HTTPError as e:
             raise HTTPException(502, f"couldn't look at it: {type(e).__name__}")
         return {"text": text[:2000]}
@@ -414,8 +433,8 @@ def create_app(
         if not settings.curator_enabled:
             raise HTTPException(409, "needs LLM_URL and LLM_KEY")
         try:
-            text = await curator.math_help(request.app.state.client, settings, h.question, h.answer, h.theirs,
-                                           h.solution)
+            text = await curator.math_help(request.app.state.client, settings_for(request.state.user), h.question,
+                                           h.answer, h.theirs, h.solution)
         except httpx.HTTPError as e:
             raise HTTPException(502, f"the LLM didn't answer: {type(e).__name__}")
         return {"help": text[:2000]}

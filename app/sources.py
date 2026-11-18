@@ -869,7 +869,7 @@ async def language(client: httpx.AsyncClient, s: Settings, rng: random.Random) -
             )
         options += [drill, drill]  # the drill is the best use of the minute; weight it
 
-    if code:
+    if code and s.language_wiki:
         async def wiki() -> Card:
             card = _wiki_card(await _wiki_random(client, code), "language", f"{lang} Wikipedia")
             card.subtitle = card.subtitle or "Read the first sentence out loud"
@@ -1684,15 +1684,15 @@ async def math(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
         url=f"https://{s.wikipedia_lang}.wikipedia.org/wiki/{quote(p.wiki.replace(' ', '_'))}",
         quiz={"answer": p.answer, "tolerance": p.tolerance, "hint": p.hint, "solution": p.solution,
               "scratch": True, "topic": p.topic},
-        actions=[{"label": "Tutor me", "url": tutor_url(p)}],
+        actions=[{"label": "Tutor me", "url": tutor_url(p, s.reply_lang)}],
         open_label="More info",
         ref="math:" + hashlib.sha1(p.question.encode()).hexdigest()[:16],
     )
 
 
-def tutor_url(p: "mathgen.Problem") -> str:
-    """A new Claude chat that coaches this problem step by step without giving it away."""
-    prompt = (f"Tutor me through this {p.topic} problem step by step, like a patient teacher. Don't give me the "
+def tutor_url(p: "mathgen.Problem", lang: str = "") -> str:
+    """A new Claude chat that coaches this problem step by step without giving it away (in `lang` if set)."""
+    prompt = ((f"Reply only in {lang}, the whole conversation.\n\n" if lang else "") + f"Tutor me through this {p.topic} problem step by step, like a patient teacher. Don't give me the "
               f"answer: ask what I'd try first, check each step I send, and give a hint only when I'm stuck.\n\n"
               f"Problem: {p.question}" + (f" (answer {p.answer_note})" if p.answer_note else "") +
               f"\n\nFor you, not me: the answer is {p.answer}. Only confirm it once I've reached it or ask for it.")
