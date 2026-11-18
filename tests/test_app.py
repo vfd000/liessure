@@ -1640,3 +1640,18 @@ def test_toasts_count_as_alcohol():
     assert not av.matches(["alcohol"], {"title": "French toast", "blurb": "Bread soaked in eggs, then fried."})
     assert "cheers!" not in curator.PHRASE_TOPICS
 
+
+def test_old_phrase_cards_without_a_quiz_are_dropped():
+    import asyncio
+    from app import lessons
+    st = Store(":memory:")
+    old = {"kind": "lesson", "title": "我想要一碗面。", "url": "https://translate.google.com/?sl=zh-CN", "quiz": {}}
+    st.add_picks(lessons.pool("owner"), [{"ref": "lesson:zh:old", "card": old, "score": 7}], rejected=[])
+    new = {"kind": "lesson", "title": "你好", "url": "https://translate.google.com/?sl=zh-CN",
+           "quiz": {"choices": ["a", "b", "c", "d"], "answer": 0}}
+    st.add_picks(lessons.pool("owner"), [{"ref": "lesson:zh:new", "card": new, "score": 7}], rejected=[])
+    for n in range(6):
+        c = asyncio.run(lessons.card(None, full_settings(), st, "owner", {"learning": []}, random.Random(n)))
+        assert c is None or c["title"] == "你好"
+    assert "lesson:zh:old" in st.known(lessons.pool("owner")) and st.pool_size(lessons.pool("owner")) <= 1
+

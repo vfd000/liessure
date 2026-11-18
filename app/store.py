@@ -424,6 +424,12 @@ class Store:
                 "SELECT COUNT(*) FROM curated WHERE kind = ? AND shown < ?", (kind, MAX_SHOWN)
             ).fetchone()[0]
 
+    def drop(self, kind: str, ref: str) -> None:
+        """Take a pick out of the pool for good (it stays known, so it isn't picked again)."""
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM curated WHERE kind = ? AND ref = ?", (kind, ref))
+            self._db.execute("INSERT OR IGNORE INTO rejected (kind, ref, ts) VALUES (?, ?, ?)", (kind, ref, time.time()))
+
     def take(self, kind: str, rng_value: float) -> dict[str, Any] | None:
         """A least-shown pick, best score first among those; marks it shown."""
         with self._lock, self._db:
