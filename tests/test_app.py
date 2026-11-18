@@ -426,7 +426,7 @@ def test_unconfigured_sources_are_skipped():
         s = c.get("/api/sources").json()["sources"]
         assert s["wikipedia"]["configured"] and not s["movie"]["configured"]
         cards = c.get("/api/feed?n=6").json()["cards"]
-        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language", "homelab", "math", "infosec"}
+        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language", "homelab", "math", "infosec", "exercise", "trivia"}
 
 
 def test_weights_and_pick():
@@ -2006,4 +2006,12 @@ def test_exercise_done_and_not_now():
         assert r["today"] == 1 and r["minutes"] >= 1
         assert c.post("/api/exercise/not-now").json()["until"] > 0
         assert c.get("/api/card/exercise").status_code == 503  # Not now holds
+
+
+def test_spread_keeps_order_but_never_two_of_a_kind_together():
+    from app.main import spread
+    ks = lambda cs: [c["kind"] for c in cs]
+    cards = [{"kind": k} for k in ("song", "song", "news", "math")]
+    assert ks(spread(cards)) == ["song", "news", "song", "math"]
+    assert ks(spread([{"kind": "a"}, {"kind": "a"}])) == ["a", "a"]  # can't be helped
 
