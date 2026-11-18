@@ -66,6 +66,31 @@ def spread(cards: list[dict]) -> list[dict]:
     return out
 
 
+def engagement_weights(weights: dict[str, int], stats: dict[str, dict[str, int]]) -> dict[str, float]:
+    """Kind weights nudged by what this person engages with: a kind they open or linger on comes up more,
+    one they scroll past less (0.5x to 1.8x), once there are at least 6 cards of it to judge by."""
+    judged = {k: v for k, v in stats.items() if v["seen"] >= 6}
+    if not judged:
+        return dict(weights)
+    overall = sum(v["engaged"] for v in judged.values()) / max(1, sum(v["seen"] for v in judged.values()))
+    out: dict[str, float] = {}
+    for k, w in weights.items():
+        v = judged.get(k)
+        if not v or not w:
+            out[k] = w
+            continue
+        rate = (v["engaged"] + 1) / (v["seen"] + 2) - 0.5 * v["skipped"] / v["seen"] * (1 - overall)
+        out[k] = w * min(1.8, max(0.5, rate / max(0.05, overall)))
+    return out
+
+
+class ViewEvent(BaseModel):
+    kind: str = Field(max_length=40)
+    ref: str = Field("", max_length=128)
+    title: str = Field("", max_length=300)
+    seconds: float = Field(ge=0, le=3600)
+
+
 class CardState(BaseModel):
     card: dict = Field(...)
     state: str = Field(pattern="^(done|later|)$")
@@ -511,6 +536,24 @@ def create_app(
             "sources": {k: {"configured": avail[k], "weight": settings.weights.get(k, 0)} for k in KINDS},
         }
 
+    @app.post("/api/views", status_code=204)
+    async def views(request: Request, body: list[ViewEvent]):
+        """How long cards were on screen (batched by the page): lingering and scrolling past, for what to show."""
+        user = request.state.user
+        for v in body[:60]:
+            if v.kind in KINDS and v.ref:
+                store.record(v.kind, v.ref, "view", v.title, user=user, value=round(v.seconds, 1))
+        return Response(status_code=204)
+
+    @app.get("/api/engagement")
+    async def engagement(request: Request, days: float = Query(30, ge=1, le=365)):
+        """Per kind over the last `days`: cards seen, engaged with, scrolled past, and the weight it now gets."""
+        user = request.state.user
+        stats = store.engagement(user, days)
+        weights = engagement_weights(settings.weights, store.engagement(user))
+        return {"kinds": {k: {**v, "weight": round(weights.get(k, 0), 2), "base": settings.weights.get(k, 0)}
+                          for k, v in sorted(stats.items())}}
+
     @app.post("/api/event", status_code=204)
     async def event(request: Request, e: Event):
         """What you opened or played. Feeds the curator's 'recommended next' seeds."""
@@ -647,7 +690,8 @@ def create_app(
         if kinds:
             wanted = {k.strip() for k in kinds.split(",")}
             avail = {k: v and k in wanted for k, v in avail.items()}
-        plan = pick_kinds(settings.weights, avail, n, rng)
+        weights = engagement_weights(settings.weights, store.engagement(user))
+        plan = pick_kinds(weights, avail, n, rng)
         client = request.app.state.client
         cards = await asyncio.gather(*(one(client, k, rng, user) for k in plan))
         out = [c for c in cards if c]
@@ -655,7 +699,7 @@ def create_app(
         # each placed where it doesn't sit next to a card of its own kind.
         empty = {k for k, c in zip(plan, cards) if not c}
         if empty and len(out) < len(plan):
-            more_plan = pick_kinds(settings.weights, {k: v and k not in empty for k, v in avail.items()},
+            more_plan = pick_kinds(weights, {k: v and k not in empty for k, v in avail.items()},
                                    len(plan) - len(out), rng)
             for extra in await asyncio.gather(*(one(client, k, rng, user) for k in more_plan)):
                 if not extra:
@@ -693,6 +737,9 @@ def create_app(
         spaced schedule), or '' to put it back to normal."""
         user = request.state.user
         store.set_state(s.card, s.state, user)
+        if s.state and s.card.get("kind") in KINDS:  # Done or Later, for engagement (Later counts as interest)
+            store.record(str(s.card.get("kind")), str(s.card.get("ref") or ""), s.state,
+                         str(s.card.get("title") or ""), user=user)
         # A to-do swiped to Done is checked off the To Do list (and unchecked if put back). The owner's only.
         ref = str(s.card.get("ref") or "")
         if (s.card.get("kind") == "todo" and user == auth.OWNER and ref.startswith("todo:") and ref[5:].isdigit()

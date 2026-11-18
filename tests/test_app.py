@@ -2015,3 +2015,31 @@ def test_spread_keeps_order_but_never_two_of_a_kind_together():
     assert ks(spread(cards)) == ["song", "news", "song", "math"]
     assert ks(spread([{"kind": "a"}, {"kind": "a"}])) == ["a", "a"]  # can't be helped
 
+
+def test_engagement_shapes_weights_and_curator_signals():
+    from app.main import engagement_weights
+    store = Store(":memory:")
+    for i in range(10):
+        store.record("news", f"n{i}", "view", f"News {i}", value=1.0)          # scrolled past
+        store.record("wikipedia", f"w{i}", "view", f"Article {i}", value=20.0)  # lingered
+    store.record("wikipedia", "w0", "open", "Article 0")
+    stats = store.engagement("owner")
+    assert stats["news"] == {"seen": 10, "engaged": 0, "skipped": 10}
+    assert stats["wikipedia"]["engaged"] == 10
+    w = engagement_weights({"news": 2, "wikipedia": 2, "math": 2}, stats)
+    assert w["news"] == 1.0 and w["wikipedia"] > 2 and w["math"] == 2  # math: nothing to judge yet
+    lingered, skipped = store.signal_titles("wikipedia")
+    assert "Article 0" not in lingered and lingered[0] == "Article 9"  # opened is a stronger signal, said elsewhere
+    assert store.signal_titles("news")[1][:1] == ["News 9"]
+    assert store.recent_titles("news") == [] and store.recent_titles("wikipedia") == ["Article 0"]  # views aren't opens
+
+
+def test_views_endpoint_and_engagement_report():
+    with make_client(full_settings()) as c:
+        r = c.post("/api/views", json=[{"kind": "news", "ref": "x1", "title": "A", "seconds": 12.3},
+                                       {"kind": "bogus", "ref": "y", "title": "B", "seconds": 1}])
+        assert r.status_code == 204
+        c.post("/api/card-state", json={"card": {"kind": "news", "ref": "x2", "title": "C"}, "state": "later"})
+        e = c.get("/api/engagement").json()["kinds"]
+        assert e["news"]["seen"] == 2 and e["news"]["engaged"] == 2 and "bogus" not in e
+

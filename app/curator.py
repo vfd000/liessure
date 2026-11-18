@@ -413,6 +413,12 @@ def _prompt(s: Settings, store: Store, kind: str, k: Kind, cands: list[Cand]) ->
     recent = store.recent_titles(kind, 12)
     if recent:
         head.append("Recently opened:\n" + "\n".join(f"- {t}" for t in recent) + "\n")
+    lingered, skipped = store.signal_titles(kind)
+    if lingered:
+        head.append("Lingered on (read the card a while, a mild yes):\n" + "\n".join(f"- {t}" for t in lingered) + "\n")
+    if skipped:
+        head.append("Scrolled straight past (a mild no; pick less like these):\n"
+                    + "\n".join(f"- {t}" for t in skipped) + "\n")
     head.append(f"Pick up to {s.curator_picks} worth showing. Answer in exactly this shape:\n{k.shape}\n")
     head.append("Candidates, as [id] details:")
     parts: list[dict[str, Any]] = [{"type": "text", "text": "\n".join(head)}]
