@@ -1932,3 +1932,20 @@ def test_percent_hint_swaps_when_that_is_easier():
     assert mathgen.percent(Pick(88, 25)).solution == "88% of 25 = 25% of 88 = a quarter of 88 = 22."
     assert mathgen.percent(Pick(35, 480)).hint.startswith("Build it")  # nothing easier to swap to
     assert mathgen.percent(Pick(12.5, 40)).hint.startswith("Build it")
+
+
+def test_listen_reads_the_article_not_just_the_card():
+    def backend(request):
+        if request.url.host == "en.wikipedia.org" and request.url.path == "/w/api.php":
+            assert request.url.params["titles"] == "Tolt River"
+            return httpx.Response(200, json={"query": {"pages": [{"extract": "The Tolt River is a tributary."}]}})
+        return fake_backend(request)
+    with make_client(full_settings(), handler=backend) as c:
+        r = c.post("/api/listen", json={"card": {"title": "Tolt River", "blurb": "short",
+                                                  "url": "https://en.wikipedia.org/wiki/Tolt_River"}}).json()
+        assert r == {"text": "Tolt River.\n\nThe Tolt River is a tributary.", "lang": "en"}
+        r = c.post("/api/listen", json={"card": {"title": "A headline", "subtitle": "Site", "blurb": "What happened.",
+                                                  "url": "https://news.example/x"}}).json()
+        assert r == {"text": "A headline.\n\nSite What happened.", "lang": "en"}
+        assert c.post("/api/listen", json={"card": {}}).status_code == 422
+

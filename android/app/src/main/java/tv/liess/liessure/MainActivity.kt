@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.FileProvider
@@ -31,6 +32,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
 import java.util.Locale
+import org.json.JSONObject
 import kotlin.concurrent.thread
 
 /**
@@ -98,6 +100,78 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         tts?.shutdown()
         super.onDestroy()
+    }
+
+    /** The text-to-speech engine, made on first use; [then] runs once it's ready, [failed] if it can't start. */
+    private fun withTts(then: (TextToSpeech) -> Unit, failed: () -> Unit) {
+        val engine = tts
+        if (ttsReady && engine != null) {
+            then(engine)
+            return
+        }
+        tts = TextToSpeech(this) { status ->
+            runOnUiThread {
+                val made = tts
+                if (status == TextToSpeech.SUCCESS && made != null) {
+                    ttsReady = true
+                    made.setOnUtteranceProgressListener(Progress())
+                    then(made)
+                } else {
+                    failed()
+                }
+            }
+        }
+    }
+
+    /** Tells the page an article finished (or failed): window.liessureSpoken(id, ok). */
+    inner class Progress : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String?) {}
+        override fun onDone(utteranceId: String?) = finished(utteranceId, true)
+        @Deprecated("Deprecated in Java")
+        override fun onError(utteranceId: String?) = finished(utteranceId, false)
+        override fun onError(utteranceId: String?, errorCode: Int) = finished(utteranceId, false)
+
+        private fun finished(utteranceId: String?, ok: Boolean) {
+            val id = utteranceId?.takeIf { it.startsWith("long:") }?.removePrefix("long:") ?: return
+            spoken(id, ok)
+        }
+    }
+
+    private fun spoken(id: String, ok: Boolean) = runOnUiThread {
+        web.evaluateJavascript("window.liessureSpoken && window.liessureSpoken(${JSONObject.quote(id)}, $ok)", null)
+    }
+
+    /** Read an article aloud in sentence-bounded pieces; the last piece's id tells the page when it's done. */
+    private fun speakLong(text: String, lang: String, id: String) {
+        withTts({ engine ->
+            val result = engine.setLanguage(Locale.forLanguageTag(lang.ifEmpty { "en" }))
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                Toast.makeText(this, "No voice for that language on this phone", Toast.LENGTH_SHORT).show()
+                spoken(id, false)
+                return@withTts
+            }
+            engine.setSpeechRate(1.0f)
+            engine.setOnUtteranceProgressListener(Progress()) // the phrase speaker may have made the engine
+            val max = minOf(3000, TextToSpeech.getMaxSpeechInputLength() - 1)
+            val pieces = mutableListOf<String>()
+            val current = StringBuilder()
+            for (sentence in text.split(Regex("(?<=[.!?\n])\\s+"))) {
+                if (current.length + sentence.length + 1 > max && current.isNotEmpty()) {
+                    pieces.add(current.toString())
+                    current.clear()
+                }
+                current.append(sentence.take(max)).append(' ')
+            }
+            if (current.isNotBlank()) pieces.add(current.toString())
+            if (pieces.isEmpty()) {
+                spoken(id, true)
+                return@withTts
+            }
+            pieces.forEachIndexed { i, piece ->
+                val utterance = if (i == pieces.lastIndex) "long:$id" else "part:$id:$i"
+                engine.speak(piece, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, utterance)
+            }
+        }, { spoken(id, false) })
     }
 
     /** Say a phrase in its language; if the phone has no voice for it, open the fallback (Google Translate). */
@@ -354,6 +428,17 @@ class MainActivity : Activity() {
         fun speak(text: String, lang: String, fallback: String) = runOnUiThread {
             if (isHome(web.url) && text.length <= 500) this@MainActivity.speak(text, lang, fallback)
         }
+
+        /** Read an article aloud (Listen, and the feed's podcast mode); window.liessureSpoken(id, ok) when done. */
+        @JavascriptInterface
+        fun speakLong(text: String, lang: String, id: String) = runOnUiThread {
+            if (isHome(web.url) && text.length <= 100_000 && id.matches(Regex("[A-Za-z0-9_-]{1,40}"))) {
+                this@MainActivity.speakLong(text, lang, id)
+            }
+        }
+
+        @JavascriptInterface
+        fun stopSpeaking() = runOnUiThread { tts?.stop() }
 
         /** Start one song in the music app, then bring the app up. */
         @JavascriptInterface
