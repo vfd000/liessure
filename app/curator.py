@@ -543,14 +543,14 @@ async def generate_phrases(client: httpx.AsyncClient, s: Settings, store: Store,
     for _ in range(count * 6):
         if len(todo) >= count:
             break
-        lang, _code = rng.choice(langs)
+        lang, code = rng.choice(langs)
         topic = rng.choice(PHRASE_TOPICS)
         ref = f"phrase:{lang}:{topic}"
         if ref not in known:
-            todo[ref] = (lang, topic)
+            todo[ref] = (lang, topic, code)
     if not todo:
         return 0
-    ask = "\n".join(f'[{ref}] {lang}: "{topic}"' for ref, (lang, topic) in todo.items())
+    ask = "\n".join(f'[{ref}] {lang}: "{topic}"' for ref, (lang, topic, _) in todo.items())
     prompt = (
         "Write one card per line below. For \"about the language\", native is the language's own name for "
         "itself and meaning is where it's spoken, how many speakers, and its script.\n\n"
@@ -563,7 +563,7 @@ async def generate_phrases(client: httpx.AsyncClient, s: Settings, store: Store,
     for c in (data.get("cards") or []) if isinstance(data, dict) else []:
         if not isinstance(c, dict) or c.get("id") not in todo or not str(c.get("native", "")).strip():
             continue
-        lang, topic = todo[c["id"]]
+        lang, topic, code = todo[c["id"]]
         native = str(c["native"]).strip()[:120]
         card = sources.Card(
             kind="language",
@@ -573,12 +573,27 @@ async def generate_phrases(client: httpx.AsyncClient, s: Settings, store: Store,
             blurb=" ".join(x for x in (str(c.get("meaning", ""))[:200], str(c.get("note", ""))[:240]) if x)
                   + " (Written by the LLM: Open checks it on Wiktionary.)",
             url=phrase_url(native),
-            actions=[{"label": "Hear it on Forvo", "url": f"https://forvo.com/search/{quote(native)}/"}],
+            actions=forvo_actions(native, code),
             ref=c["id"],
         ).to_dict()
         picks.append({"ref": c["id"], "card": card, "reason": "", "score": 7, "source": "phrase"})
     store.add_picks("language", picks, rejected=[])
     return len(picks)
+
+
+_WORD_SPLIT = re.compile(r"[\s,.;:!?¡¿\"'()\[\]，、。！？；：「」『』«»—–-]+")
+
+
+def forvo_actions(native: str, code: str) -> list[dict[str, str]]:
+    """Forvo has words, not sentences: a search for "एक, दो, तीन" finds nothing.
+    One button per word (at most four), each to that word's page."""
+    words = list(dict.fromkeys(w for w in _WORD_SPLIT.split(native) if w))
+    lang = code.split("-")[-1] if code else ""
+    anchor = f"#{lang}" if lang else ""
+    if len(words) <= 1:
+        word = words[0] if words else native
+        return [{"label": "Hear it on Forvo", "url": f"https://forvo.com/word/{quote(word)}/{anchor}"}]
+    return [{"label": f"Hear {w}", "url": f"https://forvo.com/word/{quote(w)}/{anchor}"} for w in words[:4]]
 
 
 # -------------------------------------------------------------------- runs
