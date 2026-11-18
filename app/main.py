@@ -50,7 +50,7 @@ class IdeaStatus(BaseModel):
 
 class Event(BaseModel):
     kind: str
-    action: str = Field(pattern="^(open|play)$")
+    action: str = Field(pattern="^(open|play|read)$")  # read: expanded and read in the feed
     ref: str = Field("", max_length=128)
     title: str = Field("", max_length=300)
     # What the card said, kept for recall questions (RECALL_KINDS only).

@@ -999,3 +999,33 @@ def test_math_help_for_a_wrong_answer(monkeypatch):
     with make_client(full_settings()) as c:
         assert c.post("/api/math/help", json={"question": "q", "answer": "1", "theirs": "2"}).status_code == 409
 
+
+def test_recall_asks_about_the_article_not_just_the_card():
+    import asyncio
+    st = Store(":memory:")
+    st.remember_card("wikipedia", "Cough reflex test", "Cough reflex test", "", "A short summary.",
+                     "https://en.m.wikipedia.org/wiki/Cough_reflex_test")
+    st._db.execute("UPDATE seen SET ts = ts - 86400")
+
+    def backend(request):
+        q = request.url.params
+        assert request.url.path == "/w/api.php" and q["titles"] == "Cough reflex test" and q["exchars"] == "6000"
+        return httpx.Response(200, json={"query": {"pages": [{"extract": "The cough reflex test uses citric acid. " * 40}]}})
+    seen = {}
+
+    async def ask(client, s, prompt, system=None):
+        seen["prompt"] = prompt
+        return "{}"
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(backend)) as hc:
+            await curator.generate_recall_questions(hc, full_settings(), st, ask=ask)
+    asyncio.run(run())
+    assert "citric acid" in seen["prompt"] and "A short summary." not in seen["prompt"]
+
+
+def test_reading_in_the_feed_counts(client):
+    ev = {"kind": "wikipedia", "ref": "X", "action": "read", "title": "X", "text": "t", "url": "https://en.wikipedia.org/wiki/X"}
+    assert client.post("/api/event", json=ev).status_code == 204
+    assert client.app.state.store.cards_to_ask(min_age_hours=0)[0]["ref"] == "X"
+

@@ -75,7 +75,12 @@ function renderCard(c) {
   if (c.why) body.append(el("p", "why", c.why));
   if (c.blurb) {
     const p = el("p", "blurb clamp", c.blurb);
-    p.onclick = () => p.classList.toggle("clamp");
+    let read = false;
+    p.onclick = () => {
+      p.classList.toggle("clamp");
+      // Reading it in the feed counts too: it can come back as a recall question.
+      if (!read && !p.classList.contains("clamp")) { read = true; report(c, "read"); }
+    };
     body.append(p);
   }
 
