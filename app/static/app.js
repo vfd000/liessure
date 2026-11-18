@@ -3,7 +3,8 @@
 
 const LABELS = {
   wikipedia: "Wikipedia", news: "News", game: "Games", video: "Videos", movie: "Movies",
-  show: "Series", song: "Music", photo: "Photos", language: "Telugu",
+  show: "Series", song: "Music", photo: "Photos", language: "Telugu", homelab: "Home lab",
+  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home",
 };
 const android = window.LiessureAndroid || null; // injected by the Android app
 const feed = document.getElementById("feed");

@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import curator, profile, sources
-from .config import KINDS, Settings
+from .config import KINDS, MAX_PER_LOAD, Settings
 from .store import Store
 
 log = logging.getLogger("liessure")
@@ -30,7 +30,10 @@ def pick_kinds(weights: dict[str, int], available: dict[str, bool], n: int, rng:
         return []
     picked: list[str] = []
     for _ in range(n):
-        choices = [k for k in pool if not picked or k != picked[-1]] or pool
+        capped = [k for k in pool if picked.count(k) < MAX_PER_LOAD.get(k, n)]
+        if not capped:
+            break
+        choices = [k for k in capped if not picked or k != picked[-1]] or capped
         picked.append(rng.choices(choices, weights=[weights[k] for k in choices])[0])
     return picked
 
