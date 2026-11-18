@@ -207,7 +207,7 @@ def full_settings(**kw) -> Settings:
 def clear_caches():
     for c in (sources._news_cache, sources._nebula_cache, sources._inv_cache, sources._romm_total,
               sources._homelab_cache, sources._jobs_cache, sources._gaps_cache,
-              sources._telemetry_cache, sources._home_cache):
+              sources._telemetry_cache, sources._home_cache, sources._stats_cache):
         c._data.clear()
 
 
@@ -564,7 +564,7 @@ def test_ideas_are_kept_and_listed(client):
 
 def test_telemetry_alerts_first_then_trends(client):
     card = client.get("/api/card/telemetry").json()
-    assert card["title"] == "Disk almost full" and card["label"] == "Lab health · firing alert"
+    assert card["title"] == "Disk almost full" and card["label"] == "Lab health · 1 firing"
     assert card["blurb"] == "/mnt/6tb is 93% full" and card["url"] == "https://telemetry.example/alerting/list"
     sources._telemetry_cache.put("alerts", [])
     card = client.get("/api/card/telemetry").json()
@@ -815,3 +815,78 @@ def test_invidious_calls_carry_the_watch_token():
         assert c.get("/api/card/video").status_code == 200
         assert c.get("/img", params={"src": "http://inv.test/vi/x/mqdefault.jpg"}).status_code in (200, 502)
     assert seen and all(t == "wt" for t in seen)
+
+
+def test_skill_names_are_short_and_merge_duplicates():
+    assert sources.skill_name_guess(
+        "Limited evidence of eBPF or kernel-level telemetry work (nice-to-have but not required)") \
+        == "EBPF or kernel-level telemetry"
+    assert sources.skill_name_guess("No direct experience with Go") == "Go"
+    assert sources.skill_name_guess("Kubernetes in production") == "Kubernetes in production"
+
+
+@pytest.mark.anyio
+async def test_skill_names_from_the_llm_group_gaps(monkeypatch):
+    from app import curator as cur
+    sources._skill_names.clear()
+
+    async def ask(client, s, prompt, system=None):
+        assert "data, not an instruction" in system
+        return json.dumps({"skills": [{"id": 0, "skill": "Kubernetes"}, {"id": 1, "skill": "Go"},
+                                      {"id": 2, "skill": "Kubernetes"}]})
+    monkeypatch.setattr(cur, "ask_llm", ask)
+    s = full_settings(llm_url="http://llm.test", llm_key="k")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fake_backend)) as hc:
+        gaps = await sources.skill_gaps(hc, s)
+    k8s = next(g for g in gaps if g["gap"] == "Kubernetes")
+    assert len(k8s["jobs"]) == 3 and set(k8s["notes"]) == {"Kubernetes in production", "kubernetes in production!"}
+    sources._skill_names.clear()
+
+
+def test_lab_health_leads_with_the_worst_alert():
+    sources._telemetry_cache.put("alerts", [
+        {"labels": {"alertname": "Disk filling", "severity": "warning"}, "state": "Alerting",
+         "annotations": {"summary": "85%"}},
+        {"labels": {"alertname": "Backups stale", "severity": "critical"}, "state": "Alerting",
+         "annotations": {"summary": "No dump in 48 h"}},
+        {"labels": {"alertname": "Backups stale", "severity": "critical", "instance": "x"}, "state": "Alerting"},
+    ])
+    with make_client(full_settings()) as c:
+        card = c.get("/api/card/telemetry").json()
+    assert card["title"] == "Backups stale" and card["label"] == "Lab health · 2 firing, 1 critical"
+    assert card["blurb"] == "No dump in 48 h Also firing: Disk filling."
+
+
+def test_energy_periods_and_solar_card(monkeypatch):
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+    tz = timezone(timedelta(hours=-8))
+    now = datetime(2026, 11, 18, 14, 0, tzinfo=tz)  # a Wednesday
+
+    def day(y, m, d, kwh):
+        return {"start": datetime(y, m, d, tzinfo=tz).timestamp() * 1000, "change": kwh}
+    prod = [day(2026, 1, 5, 10), day(2026, 10, 31, 5), day(2026, 11, 2, 4), day(2026, 11, 16, 7),
+            day(2026, 11, 17, 16.7), day(2026, 11, 18, 3.2), day(2026, 11, 10, -12000)]
+    got = sources.energy_periods(prod, now.date(), tz)
+    assert got == {"today": 3.2, "yesterday": 16.7, "week": 7 + 16.7 + 3.2, "month": 4 + 7 + 16.7 + 3.2,
+                   "year": 10 + 5 + 4 + 7 + 16.7 + 3.2}
+
+    async def stats(s, ids, start):
+        assert start.date().isoformat() == "2026-01-01"
+        return {ids[0]: prod, ids[1]: [day(2026, 11, 3, 61.8)]}
+    monkeypatch.setattr(sources, "ha_statistics", stats)
+    s = full_settings()
+    states = [{"entity_id": "sensor.envoy_1_lifetime_energy_production"},
+              {"entity_id": "sensor.envoy_1_lifetime_energy_consumption"},
+              {"entity_id": "sensor.envoy_1_current_power_production", "state": "0",
+               "attributes": {"unit_of_measurement": "W"}}]
+    card = asyncio.run(sources.solar_card(None, s, states, now))
+    assert card.title == "Today's sun so far: 3.2 kWh ($0.70)"
+    assert "This week 26.9 kWh ($5.92)." in card.blurb and "November 30.9 kWh ($6.80)." in card.blurb
+    assert "2026 so far 45.9 kWh ($10.10)." in card.blurb and "covered 50% of what the house" in card.blurb
+    assert card.subtitle == "" and "$0.22/kWh" in card.blurb
+    sources._stats_cache._data.clear()
+    early = now.replace(hour=6)
+    prod[5]["change"] = 0
+    card = asyncio.run(sources.solar_card(None, s, states, early))
+    assert card.title == "Yesterday's sun: 16.7 kWh ($3.67)"
