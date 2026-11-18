@@ -16,6 +16,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
@@ -29,7 +30,9 @@ import kotlin.concurrent.thread
  *  - cards open in the app that owns them (Immich, Jellyfin, a browser), and
  *    song cards can launch Symfonium directly;
  *  - it answers the gatekeeper's mTLS challenge with the client certificate
- *    installed on the phone, so it works off the home network too.
+ *    installed on the phone, so it works off the home network too;
+ *  - with no network it falls back to the WebView's cache, so the page (and
+ *    the cards it saved last time) still opens.
  */
 class MainActivity : Activity() {
 
@@ -42,6 +45,9 @@ class MainActivity : Activity() {
     }
 
     private val prefs by lazy { getSharedPreferences("liessure", Context.MODE_PRIVATE) }
+
+    /** Set while a load is being retried from cache after a network error. */
+    private var fromCache = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,6 +94,8 @@ class MainActivity : Activity() {
     }
 
     private fun loadFor(intent: Intent?) {
+        fromCache = false
+        web.settings.cacheMode = WebSettings.LOAD_DEFAULT
         val fromReddit = intent?.data?.host?.contains("redd") == true
         val url = if (fromReddit) home.buildUpon().appendQueryParameter("from", "reddit").build() else home
         web.loadUrl(url.toString())
@@ -152,8 +160,21 @@ class MainActivity : Activity() {
             return true
         }
 
+        override fun onPageFinished(view: WebView, url: String?) {
+            // The cached page is up; let its own requests try the network again.
+            view.settings.cacheMode = WebSettings.LOAD_DEFAULT
+        }
+
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
             if (!request.isForMainFrame) return
+            // Offline (normally the service worker answers; this covers before it's installed):
+            // open the last copy of the page once, and it shows the cards it saved.
+            if (!fromCache && isHome(request.url.toString()) && error.errorCode in OFFLINE_ERRORS) {
+                fromCache = true
+                view.settings.cacheMode = WebSettings.LOAD_CACHE_ONLY
+                view.loadUrl(request.url.toString())
+                return
+            }
             val html = """
                 <html><body style="background:#14161a;color:#eceae6;font-family:sans-serif;
                   display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh">
@@ -202,4 +223,10 @@ class MainActivity : Activity() {
         request.proceed(key, chain)
         true
     }.getOrDefault(false)
+
+    private companion object {
+        val OFFLINE_ERRORS = setOf(
+            WebViewClient.ERROR_HOST_LOOKUP, WebViewClient.ERROR_CONNECT, WebViewClient.ERROR_TIMEOUT,
+        )
+    }
 }

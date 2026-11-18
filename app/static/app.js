@@ -13,6 +13,22 @@ let filter = new Set();
 let loading = false;
 let generation = 0;
 let configured = [];
+let offline = false;
+let shown = new Set(); // keys of cards on screen, so saved ones aren't repeated
+
+// The last cards the server sent, kept so there's something to read when the
+// network drops (see sw.js for the page and images).
+const SAVED_KEY = "liessure.lastCards";
+const SAVED_MAX = 60;
+const cardKey = (c) => c.kind + ":" + (c.ref || c.url);
+function savedCards() {
+  try { return JSON.parse(localStorage.getItem(SAVED_KEY)) || []; } catch { return []; }
+}
+function saveCards(cards) {
+  const keys = new Set(cards.map(cardKey));
+  const kept = [...cards, ...savedCards().filter((c) => !keys.has(cardKey(c)))].slice(0, SAVED_MAX);
+  try { localStorage.setItem(SAVED_KEY, JSON.stringify(kept)); } catch {}
+}
 
 const params = new URLSearchParams(location.search);
 if (params.get("from") === "reddit") document.getElementById("banner").hidden = false;
@@ -128,22 +144,45 @@ async function load(n = 6) {
     if (!r.ok) throw new Error(r.status);
     const { cards } = await r.json();
     if (gen !== generation) return;
+    offline = false;
     if (!cards.length && !feed.children.length) {
       feed.append(el("div", "empty", "Nothing came back. Pull ↻ to try again."));
     }
-    for (const c of cards) feed.append(renderCard(c));
+    saveCards(cards);
+    for (const c of cards) show(c);
   } catch (e) {
-    if (!feed.children.length) feed.append(el("div", "empty", "Couldn't reach Liessure. ↻ to retry."));
+    if (gen === generation) {
+      if (!offline) showSaved();
+      offline = true;
+    }
   } finally {
     loading = false;
   }
-  // Keep filling until the sentinel is off screen.
-  if (gen === generation && sentinel.getBoundingClientRect().top < innerHeight + 400) load();
+  // Keep filling until the sentinel is off screen (not while offline: that would spin).
+  if (gen === generation && !offline && sentinel.getBoundingClientRect().top < innerHeight + 400) load();
+}
+
+function show(c) {
+  shown.add(cardKey(c));
+  feed.append(renderCard(c));
+}
+
+// Offline: whatever was saved last time that isn't on screen yet.
+function showSaved() {
+  const rest = savedCards().filter((c) => !shown.has(cardKey(c)) && (!filter.size || filter.has(c.kind)));
+  if (!rest.length) {
+    if (!feed.children.length) feed.append(el("div", "empty", "Couldn't reach Liessure. ↻ to retry."));
+    return;
+  }
+  feed.append(el("div", "offline", "Offline. Here's what you had last time; new cards come back with the connection."));
+  for (const c of rest) show(c);
 }
 
 function reset() {
   generation++;
   loading = false;
+  offline = false;
+  shown = new Set();
   feed.replaceChildren();
   scrollTo({ top: 0 });
   load();
@@ -168,6 +207,7 @@ function renderChips() {
 }
 
 document.getElementById("refresh").onclick = reset;
+addEventListener("online", () => { if (offline) reset(); });
 new IntersectionObserver((entries) => {
   if (entries.some((e) => e.isIntersecting)) load();
 }, { rootMargin: "600px" }).observe(sentinel);
