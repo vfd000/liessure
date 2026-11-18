@@ -1434,9 +1434,20 @@ async def math(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
         title=p.question,
         subtitle=f"Answer {p.answer_note}" if p.answer_note else "",
         url=f"https://{s.wikipedia_lang}.wikipedia.org/wiki/{quote(p.wiki.replace(' ', '_'))}",
-        quiz={"answer": p.answer, "tolerance": p.tolerance, "hint": p.hint, "solution": p.solution},
+        quiz={"answer": p.answer, "tolerance": p.tolerance, "hint": p.hint, "solution": p.solution,
+              "scratch": True, "topic": p.topic},
+        actions=[{"label": "Tutor me", "url": tutor_url(p)}],
         ref="math:" + hashlib.sha1(p.question.encode()).hexdigest()[:16],
     )
+
+
+def tutor_url(p: "mathgen.Problem") -> str:
+    """A new Claude chat that coaches this problem step by step without giving it away."""
+    prompt = (f"Tutor me through this {p.topic} problem step by step, like a patient teacher. Don't give me the "
+              f"answer: ask what I'd try first, check each step I send, and give a hint only when I'm stuck.\n\n"
+              f"Problem: {p.question}" + (f" (answer {p.answer_note})" if p.answer_note else "") +
+              f"\n\nFor you, not me: the answer is {p.answer}. Only confirm it once I've reached it or ask for it.")
+    return "https://claude.ai/new?" + urlencode({"q": prompt})
 
 
 async def recall(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:

@@ -15,6 +15,10 @@
             <data android:scheme="https" />
         </intent>
         <intent>
+            <!-- Android 11+: find the text-to-speech engine that reads phrase cards aloud -->
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <intent>
             <!-- Argosy: argosy://launch?romm_id=N starts a RomM game -->
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="argosy" />

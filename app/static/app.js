@@ -94,6 +94,12 @@ function renderCard(c) {
   go.onclick = (e) => { e.preventDefault(); report(c, "open"); openUrl(c.url, c.open_in_app); };
   actions.append(go);
   for (const a of c.actions || []) {
+    if (a.speak) {
+      const b = el("button", "", a.label);
+      b.onclick = () => speak(a.speak);
+      actions.append(b);
+      continue;
+    }
     if (a.app) {
       if (!android) continue; // app launch only makes sense on the phone
       const b = el("button", "", a.label);
@@ -117,6 +123,55 @@ function renderCard(c) {
 
   if (c.image) card.querySelector(".media").onclick = () => { report(c, "open"); openUrl(c.url, c.open_in_app); };
   return card;
+}
+
+// Say a phrase: Android's text-to-speech in the app, the browser's voices elsewhere,
+// Google Translate (which reads anything aloud) when neither has the language.
+function speak({ text, lang, fallback }) {
+  if (android && android.speak) return android.speak(text, lang, fallback || "");
+  const synth = window.speechSynthesis;
+  const base = (lang || "").split("-")[0];
+  const voice = synth && synth.getVoices().find((v) => v.lang === lang) ||
+    synth && synth.getVoices().find((v) => v.lang.split("-")[0] === base);
+  if (!voice) return fallback && openUrl(fallback);
+  const u = new SpeechSynthesisUtterance(text);
+  u.voice = voice;
+  u.lang = voice.lang;
+  u.rate = 0.85;
+  synth.cancel();
+  synth.speak(u);
+}
+
+// A finger-and-mouse scratch pad, for the working you'd do on paper.
+function scratchPad() {
+  const wrap = el("div", "scratch");
+  const canvas = document.createElement("canvas");
+  const bar = el("div", "scratch-bar");
+  const clear = el("button", "", "Clear");
+  bar.append(el("span", "why", "Scratch pad: work it out here."), clear);
+  wrap.append(canvas, bar);
+  let ctx, last = null;
+  const fit = () => {
+    const r = window.devicePixelRatio || 1, w = wrap.clientWidth || 300, h = Math.round(w * 0.6);
+    canvas.width = w * r; canvas.height = h * r;
+    canvas.style.width = w + "px"; canvas.style.height = h + "px";
+    ctx = canvas.getContext("2d");
+    ctx.scale(r, r);
+    ctx.lineWidth = 2.2; ctx.lineCap = ctx.lineJoin = "round";
+    ctx.strokeStyle = getComputedStyle(document.body).color;
+  };
+  const at = (e) => { const b = canvas.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; };
+  canvas.onpointerdown = (e) => { if (!ctx) fit(); canvas.setPointerCapture(e.pointerId); last = at(e); };
+  canvas.onpointermove = (e) => {
+    if (!last) return;
+    const p = at(e);
+    ctx.beginPath(); ctx.moveTo(...last); ctx.lineTo(...p); ctx.stroke();
+    last = p;
+  };
+  canvas.onpointerup = canvas.onpointercancel = () => { last = null; };
+  clear.onclick = fit;
+  requestAnimationFrame(fit);
+  return wrap;
 }
 
 // "3/8", "-12", "1,200", "28.3", "$0.05": a number, or NaN.
@@ -167,7 +222,25 @@ function renderQuiz(c) {
     const check = el("button", "primary", "Check");
     const hint = el("button", "", "Hint");
     const show = el("button", "", "Show answer");
+    if (q.scratch) {
+      const pad = el("button", "", "Scratch pad");
+      pad.onclick = () => { pad.remove(); box.insertBefore(scratchPad(), result); };
+      row.append(pad);
+    }
     let tries = 0;
+    // Each answered (or revealed) math card is kept server-side; the reply is the running tally.
+    const progress = (correct, revealed) => {
+      if (!q.topic) return;
+      fetch("/api/math", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ref: c.ref, topic: q.topic, correct, tries, revealed }) })
+        .then((r) => r.json())
+        .then((st) => {
+          const bits = [`Today ${st.today.right}/${st.today.tried}`, `this week ${st.week.right}/${st.week.tried}`];
+          if (st.streak_days) bits.push(`${st.streak_days}-day streak`);
+          if (st.weakest) bits.push(`weakest lately: ${st.weakest}`);
+          box.append(el("p", "why", bits.join(" · ")));
+        }).catch(() => {});
+    };
     check.onclick = () => {
       const got = parseNum(input.value), want = parseNum(q.answer);
       if (Number.isNaN(got)) { result.textContent = "Type a number (fractions like 3/8 are fine)."; return; }
@@ -177,6 +250,7 @@ function renderQuiz(c) {
         solution.hidden = false;
         check.disabled = input.disabled = true;
         report(c, "play");
+        progress(true, false);
       } else result.textContent = "Not that. Try again, or take the hint.";
     };
     input.onkeydown = (e) => { if (e.key === "Enter") check.onclick(); };
@@ -184,6 +258,7 @@ function renderQuiz(c) {
     show.onclick = () => {
       result.textContent = `Answer: ${q.answer}`;
       solution.hidden = false;
+      if (!check.disabled) progress(false, true);
       check.disabled = input.disabled = true;
     };
     row.append(input, check, hint, show);

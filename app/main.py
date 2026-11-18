@@ -63,6 +63,14 @@ class RecallAnswer(BaseModel):
     correct: bool
 
 
+class MathAnswer(BaseModel):
+    ref: str = Field(max_length=64)
+    topic: str = Field("", max_length=40)
+    correct: bool
+    tries: int = Field(1, ge=0, le=99)
+    revealed: bool = False
+
+
 def create_app(
     settings: Settings | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -107,9 +115,10 @@ def create_app(
             pick = store.take(kind, rng.random())
             if pick:
                 card = {**pick["card"], "why": pick["reason"]}
-                if any(a.get("url", "").startswith("https://forvo.com/search/") for a in card.get("actions") or []):
-                    # Phrase cards curated before per-word links: Forvo's search finds no sentences.
-                    card["actions"] = curator.forvo_actions(card["title"], "")
+                if any("forvo.com/" in a.get("url", "") for a in card.get("actions") or []):
+                    # Phrase cards curated with Forvo links, which don't work for phrases: speak them instead.
+                    card["actions"] = curator.phrase_actions(card["title"], curator.code_for_label(settings, card["label"]))
+                    card["url"] = curator.phrase_url(card["title"])
                 return card
         try:
             s = await profiles.get(client)  # the graph's languages, home and interests, or the env fallback
@@ -174,6 +183,16 @@ def create_app(
         if out is None:
             raise HTTPException(404, "no such question")
         return out
+
+    @app.post("/api/math")
+    async def answer_math(a: MathAnswer):
+        """A math card answered (or given up on): kept for progress, returns it."""
+        store.record_math(a.ref, a.topic, a.correct, a.tries, a.revealed)
+        return store.math_stats()
+
+    @app.get("/api/math/stats")
+    async def math_stats():
+        return store.math_stats()
 
     @app.get("/api/recall/stats")
     async def recall_stats():

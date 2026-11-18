@@ -40,6 +40,7 @@ feed, so a fresh deploy shows Wikipedia and language cards only.
 | `home` | Home Assistant: solar today (or yesterday, before sunrise), this week, this month and this year, in kWh and dollars, from HA's long-term statistics; the weather | `HA_URL`, `HA_TOKEN`, `HOME_ENERGY_RATE` ($/kWh, 0.22: PSE's effective rate) |
 | `math` | A problem or puzzle to solve in the card: mental arithmetic, percentages, fractions, algebra, number theory, counting and probability, sequences, geometry, classic puzzles. Generated on the server (`app/mathgen.py`), so answers are exact; the page checks them (fractions fine), with a hint and a worked solution | none |
 | `todo` | An open item from the household To Do list with an LLM estimate of how long it takes and why; short ones by day, longer ones in the evening. Estimates are kept and redone only when an item changes; the card links, ticking off stays in the lists app | `LISTS_URL`, `LISTS_TOKEN` (the lists service's `MCP_API_TOKEN`), `TODO_LIST_ID` (6), the LLM |
+| `math` (more) | A scratch pad to draw your working with a finger; **Tutor me** opens a new Claude chat that coaches the problem step by step without giving it away; every answer is kept, and the card shows today, this week, the daily streak and the weakest topic (`GET /api/math/stats`) | none |
 | `recall` | Did it stick? A multiple-choice question about a card you opened a day or more ago, spaced out (1, 3, 7, 21, 60, 180 days; a miss starts it over) | the curator's LLM writes the questions |
 
 **Recall.** When you open or play a Wikipedia, news, home-lab, language or
@@ -242,6 +243,10 @@ tagged `v0.1.<run>` with the APK attached, which is what **Obtainium** tracks.
   (the `app.symfonium.api.MEDIA_START` broadcast, by title, artist and
   album) and brings the app up. Another `MUSIC_APP_PACKAGE` gets Android's
   play-from-search intent.
+- **Phrases:** "Hear it" on a language phrase card speaks it with the phone's
+  text-to-speech (install the language's voice in Android's TTS settings, e.g.
+  Cantonese, Hindi, Telugu); with no voice it opens Google Translate, which reads
+  any phrase aloud.
 - **Catching Reddit links:** Settings → Apps → Liessure → Open by default →
   Add link → tick the reddit hosts. (Reddit's own app, if installed, has to
   be uninstalled or have its link handling turned off.) Then put Liessure where

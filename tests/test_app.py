@@ -537,14 +537,29 @@ def test_photo_without_vision_sends_text_only():
         assert isinstance(body["messages"][1]["content"], str)
 
 
-def test_forvo_links_are_per_word():
-    one = curator.forvo_actions("नमस्ते", "hi")
-    assert len(one) == 1 and one[0]["label"] == "Hear it on Forvo"
-    assert one[0]["url"].startswith("https://forvo.com/word/%E0%A4") and one[0]["url"].endswith("/#hi")
-    many = curator.forvo_actions("एक, दो, तीन, चार, पाँच", "hi")
-    assert [a["label"] for a in many] == ["Hear एक", "Hear दो", "Hear तीन", "Hear चार"]
-    assert all(a["url"].startswith("https://forvo.com/word/") and "%2C" not in a["url"] for a in many)
-    assert curator.forvo_actions("早晨！", "zh-yue")[0]["url"].endswith("/#yue")
+def test_phrase_links_speak_instead_of_forvo():
+    acts = curator.phrase_actions("廁所喺邊度?", "zh-yue")
+    assert acts[0] == {"label": "Hear it", "speak": {"text": "廁所喺邊度?", "lang": "zh-HK", "fallback": acts[1]["url"]}}
+    assert acts[1]["label"] == "Google Translate" and "sl=yue" in acts[1]["url"] and "tl=en" in acts[1]["url"]
+    assert curator.phrase_actions("नमस्ते", "hi")[0]["speak"]["lang"] == "hi-IN"
+    assert curator.phrase_url("廁所喺邊度?").endswith("%E5%BA%A6")  # no trailing "?"
+    s = full_settings()
+    assert curator.code_for_label(s, "Cantonese · where is the bathroom?") == "zh-yue"
+    assert curator.code_for_label(s, "Klingon · hello") == ""
+
+
+def test_old_forvo_phrase_cards_are_rewritten_when_served():
+    st = Store(":memory:")
+    old = sources.Card(kind="language", label="Cantonese · where is the bathroom?", title="廁所喺邊度?",
+                       url="https://en.wiktionary.org/w/index.php?search=x",
+                       actions=[{"label": "Hear it on Forvo", "url": "https://forvo.com/word/x/#yue"}],
+                       ref="phrase:Cantonese:where").to_dict()
+    st.add_picks("language", [{"ref": old["ref"], "card": old, "reason": "", "score": 7}], rejected=[])
+    s = full_settings(llm_url="http://llm.test", llm_key="k", curator_share=1.0)
+    app = create_app(s, transport=httpx.MockTransport(fake_backend), store=st, run_curator=False)
+    with TestClient(app) as c:
+        card = c.get("/api/card/language").json()
+    assert card["actions"][0]["speak"]["lang"] == "zh-HK" and "forvo" not in json.dumps(card)
 
 
 def test_ideas_are_kept_and_listed(client):
@@ -608,7 +623,12 @@ def test_math_answers_are_exact_numbers():
 def test_math_card_offers_a_quiz(client):
     card = client.get("/api/card/math").json()
     assert card["kind"] == "math" and card["label"].startswith("Math · ")
-    assert set(card["quiz"]) == {"answer", "tolerance", "hint", "solution"}
+    assert set(card["quiz"]) == {"answer", "tolerance", "hint", "solution", "scratch", "topic"}
+    tutor = card["actions"][0]
+    assert tutor["label"] == "Tutor me" and tutor["url"].startswith("https://claude.ai/new?q=")
+    from urllib.parse import parse_qs, urlparse
+    q = parse_qs(urlparse(tutor["url"]).query)["q"][0]
+    assert card["title"] in q and "Don't give me the answer" in q and card["quiz"]["answer"] in q
     assert card["url"].startswith("https://en.wikipedia.org/wiki/")
 
 
@@ -941,3 +961,23 @@ def test_todo_card_endpoint(monkeypatch):
         card = c.get("/api/card/todo").json()
     assert card["title"] == "Renew passport" and card["label"] == "To do · 20 min"
     assert card["url"] == "https://lists.example/" and card["blurb"] == "Online form."
+
+
+def test_math_progress_is_kept():
+    import time as _t
+    st = Store(":memory:")
+    day = 86400
+    now = _t.time()
+    # Two days ago and yesterday right; today one right, one revealed; probability is weak.
+    for ago, topic, ok in [(2, "algebra", 1), (1, "algebra", 1), (0, "algebra", 1),
+                           (0, "probability", 0), (0, "probability", 0), (0, "probability", 0)]:
+        st._db.execute("INSERT INTO math_attempts VALUES (?, 'r', ?, ?, 1, ?)", (now - ago * day, topic, ok, 1 - ok))
+    stats = st.math_stats(now)
+    assert stats["today"] == {"tried": 4, "right": 1} and stats["streak_days"] == 3
+    assert stats["weakest"] == "probability" and stats["weakest_rate"] == 0
+    with make_client(full_settings()) as c:
+        r = c.post("/api/math", json={"ref": "math:x", "topic": "geometry", "correct": True, "tries": 2})
+        assert r.status_code == 200 and r.json()["today"] == {"tried": 1, "right": 1}
+        assert r.json()["streak_days"] == 1
+        assert c.get("/api/math/stats").json()["all"]["tried"] == 1
+

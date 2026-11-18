@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS todo_estimates (  -- how long a to-do item takes, red
     item_id INTEGER PRIMARY KEY, text_hash TEXT NOT NULL, minutes INTEGER NOT NULL,
     label TEXT NOT NULL, assumption TEXT NOT NULL DEFAULT '', ts REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS math_attempts (   -- every math card answered: right, tries, gave up
+    ts REAL NOT NULL, ref TEXT NOT NULL, topic TEXT NOT NULL, correct INTEGER NOT NULL,
+    tries INTEGER NOT NULL, revealed INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS rejected (
     kind TEXT NOT NULL, ref TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (kind, ref)
 );
@@ -152,6 +156,43 @@ class Store:
                 (time.time() - days * 86400,),
             ).fetchone()
         return {"answered_30d": row["n"], "correct_30d": row["ok"]}
+
+    # --- math progress
+    def record_math(self, ref: str, topic: str, correct: bool, tries: int, revealed: bool) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO math_attempts (ts, ref, topic, correct, tries, revealed) VALUES (?, ?, ?, ?, ?, ?)",
+                (time.time(), ref[:64], topic[:40], int(correct), tries, int(revealed)))
+
+    def math_stats(self, now: float | None = None) -> dict[str, Any]:
+        """Today, this week (from Monday), the daily streak and the weakest topic of the last 30 days.
+        Days are local to the server (the CT runs on household time)."""
+        import datetime as _dt
+        now = now or time.time()
+        today = _dt.date.fromtimestamp(now)
+        midnight = _dt.datetime.combine(today, _dt.time()).timestamp()
+        monday = midnight - today.weekday() * 86400
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT ts, topic, correct, revealed FROM math_attempts WHERE ts >= ?", (now - 400 * 86400,)
+            ).fetchall()
+
+        def tally(since: float) -> dict[str, int]:
+            sel = [r for r in rows if r["ts"] >= since]
+            return {"tried": len(sel), "right": sum(r["correct"] for r in sel)}
+        solved_days = {_dt.date.fromtimestamp(r["ts"]) for r in rows if r["correct"]}
+        streak, day = 0, today if today in solved_days else today - _dt.timedelta(days=1)
+        while day in solved_days:
+            streak += 1
+            day -= _dt.timedelta(days=1)
+        by_topic: dict[str, list[int]] = {}
+        for r in rows:
+            if r["ts"] >= now - 30 * 86400:
+                by_topic.setdefault(r["topic"], []).append(r["correct"])
+        rated = {t: sum(v) / len(v) for t, v in by_topic.items() if len(v) >= 3}
+        weakest = min(rated, key=rated.get) if rated else ""
+        return {"today": tally(midnight), "week": tally(monday), "all": tally(0), "streak_days": streak,
+                "weakest": weakest, "weakest_rate": round(rated[weakest], 2) if weakest else None}
 
     # --- to-do estimates
     def todo_estimates(self) -> dict[int, dict[str, Any]]:

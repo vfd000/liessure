@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.speech.tts.TextToSpeech
 import android.security.KeyChain
 import android.view.WindowInsets
 import android.webkit.ClientCertRequest
@@ -22,6 +23,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import java.util.Locale
 import kotlin.concurrent.thread
 
 /**
@@ -47,6 +49,10 @@ class MainActivity : Activity() {
     }
 
     private val prefs by lazy { getSharedPreferences("liessure", Context.MODE_PRIVATE) }
+
+    /** Speaks phrase cards; created on first use, released in onDestroy. */
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
 
     /** Hosts the feed asked to show in place (openInApp), e.g. Jellyfin; cleared on the next feed load. */
     private val visiting = mutableSetOf<String>()
@@ -80,6 +86,40 @@ class MainActivity : Activity() {
         web.webViewClient = Client()
 
         if (savedInstanceState != null) web.restoreState(savedInstanceState) else loadFor(intent)
+    }
+
+    override fun onDestroy() {
+        tts?.shutdown()
+        super.onDestroy()
+    }
+
+    /** Say a phrase in its language; if the phone has no voice for it, open the fallback (Google Translate). */
+    private fun speak(text: String, lang: String, fallback: String) {
+        val say = say@{
+            val engine = tts ?: return@say
+            val result = engine.setLanguage(Locale.forLanguageTag(lang))
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                Toast.makeText(this, "No voice for that language on this phone", Toast.LENGTH_SHORT).show()
+                if (fallback.startsWith("https://")) openExternal(fallback)
+                return@say
+            }
+            engine.setSpeechRate(0.85f)
+            engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "liessure-phrase")
+        }
+        if (ttsReady) {
+            say()
+            return
+        }
+        tts = TextToSpeech(this) { status ->
+            runOnUiThread {
+                if (status == TextToSpeech.SUCCESS) {
+                    ttsReady = true
+                    say()
+                } else if (fallback.startsWith("https://")) {
+                    openExternal(fallback)
+                }
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -196,6 +236,12 @@ class MainActivity : Activity() {
                 visiting.add(uri.host!!)
                 web.loadUrl(url)
             }
+        }
+
+        /** Say a phrase card aloud with the phone's text-to-speech. */
+        @JavascriptInterface
+        fun speak(text: String, lang: String, fallback: String) = runOnUiThread {
+            if (isHome(web.url) && text.length <= 500) this@MainActivity.speak(text, lang, fallback)
         }
 
         /** Start one song in the music app, then bring the app up. */
