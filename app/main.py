@@ -38,6 +38,15 @@ def pick_kinds(weights: dict[str, int], available: dict[str, bool], n: int, rng:
     return picked
 
 
+class Idea(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    about: str = Field("", max_length=400)
+
+
+class IdeaStatus(BaseModel):
+    status: str = Field(pattern="^(new|planned|done|dropped)$")
+
+
 class Event(BaseModel):
     kind: str
     action: str = Field(pattern="^(open|play)$")
@@ -122,6 +131,22 @@ def create_app(
             raise HTTPException(400, "unknown kind")
         store.record(e.kind, e.ref, e.action, e.title)
         return Response(status_code=204)
+
+    @app.post("/api/ideas", status_code=201)
+    async def add_idea(i: Idea):
+        """An improvement jotted down from the app's ideas button, kept to build later."""
+        return {"id": store.add_idea(i.text.strip(), i.about.strip())}
+
+    @app.get("/api/ideas")
+    async def list_ideas(status: str = ""):
+        ideas = store.ideas()
+        return {"ideas": [i for i in ideas if not status or i["status"] == status]}
+
+    @app.post("/api/ideas/{idea_id}/status")
+    async def idea_status(idea_id: int, body: IdeaStatus):
+        if not store.set_idea_status(idea_id, body.status):
+            raise HTTPException(404, "no such idea")
+        return {"id": idea_id, "status": body.status}
 
     @app.post("/api/curate")
     async def curate_now(request: Request, kind: str = ""):

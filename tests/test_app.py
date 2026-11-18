@@ -509,6 +509,21 @@ def test_forvo_links_are_per_word():
     assert curator.forvo_actions("早晨！", "zh-yue")[0]["url"].endswith("/#yue")
 
 
+def test_ideas_are_kept_and_listed(client):
+    r = client.post("/api/ideas", json={"text": "  Show trail conditions  ", "about": "photo: Riverbend"})
+    assert r.status_code == 201
+    idea_id = r.json()["id"]
+    assert client.post("/api/ideas", json={"text": ""}).status_code == 422
+    ideas = client.get("/api/ideas").json()["ideas"]
+    assert ideas[0]["text"] == "Show trail conditions" and ideas[0]["about"] == "photo: Riverbend"
+    assert ideas[0]["status"] == "new"
+    assert client.post(f"/api/ideas/{idea_id}/status", json={"status": "planned"}).status_code == 200
+    assert client.post(f"/api/ideas/{idea_id}/status", json={"status": "bogus"}).status_code == 422
+    assert client.post("/api/ideas/999/status", json={"status": "done"}).status_code == 404
+    assert client.get("/api/ideas?status=planned").json()["ideas"][0]["id"] == idea_id
+    assert client.get("/api/ideas?status=new").json()["ideas"] == []
+
+
 def test_phrase_cards():
     calls = []
     c, store = curated_client(calls)
