@@ -24,7 +24,9 @@ CATEGORIES: dict[str, list[str]] = {
         "vintner", "whisk(e)?y", "bourbon", "scotch", "vodka", "gin", "rum", "tequila", "mezcal", "liqueurs?",
         "liquor", "spirits \\(drink\\)", "cocktails?", "brandy", "cognac", "sake", "ciders?", "distiller(y|ies)",
         "pubs?", "bartender", "champagne", "prosecco", "absinthe", "lager", "drunk(enness)?", "hangover",
-        "booze", "sommelier", "taproom",
+        "booze", "sommelier", "taproom", "drinking", "drinkers?", "toast (said|before|to|with|for)",
+        "toasts?(ing)? (each other|the|your|our|a)\\b", "cheers", "salud", "kanpai", "santé", "prost",
+        "bars?( and| or)? (pubs?|clubs?)", "happy hour", "nightclubs?",
     ],
     "animal products": [
         "meats?", "beef", "pork", "bacon", "ham", "steaks?", "sausages?", "veal", "lamb chops?", "poultry",

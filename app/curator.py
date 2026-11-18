@@ -520,7 +520,7 @@ async def curate_kind(client: httpx.AsyncClient, s: Settings, store: Store, kind
 PHRASE_TOPICS = [
     "hello", "thank you", "goodbye", "excuse me / sorry", "please", "yes and no",
     "nice to meet you", "how are you?", "I don't understand", "how much is this?",
-    "where is the bathroom?", "cheers!", "delicious!", "numbers one to five", "my name is ...",
+    "where is the bathroom?", "good morning", "delicious!", "numbers one to five", "my name is ...",
     "about the language",  # where it's spoken, script, a striking feature
 ]
 
