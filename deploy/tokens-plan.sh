@@ -20,8 +20,10 @@
 #           lock so the timer can't race it), waits for /healthz, prints the first 1200 bytes of /api/sources
 #   On any failure after a change: deletes the liessure Grafana service account, shreds the minted file, removes the
 #   six .env lines and recreates the container again (the timer file stays: it is harmless either way)
-#   wtr: none - only relays commands with pct exec; ssh to axl@10.11.2.233 uses BatchMode and
-#   StrictHostKeyChecking=accept-new
+#   wtr: no files or settings change. Every step is an ssh to axl@10.11.2.233 (BatchMode,
+#   StrictHostKeyChecking=accept-new: a first-seen key is accepted, a changed one fails) running sudo pct exec. The
+#   three copies in step 3 run as sudo bash -c pipelines on wtr: pct exec <source ct> ... | pct exec 163 -- tee -a
+#   .env, so each token passes through a pipe in wtr's memory (never written to wtr's disk, never printed)
 # END CHANGES
 #
 # Liessure's jobs, Grafana and Home Assistant tokens, without anyone typing one; and the 30 s deploy timer.
