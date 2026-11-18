@@ -5,6 +5,7 @@ import logging
 import random
 import re
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -99,6 +100,8 @@ def create_app(
         if kind == "recall":
             row = store.due_recall()
             return sources.recall_card(row).to_dict() if row else None
+        if kind == "todo":
+            return await todo_card(client, rng)
         # Mostly the curated pool; a share of uncurated cards keeps some surprise in it.
         if settings.curator_enabled and rng.random() < settings.curator_share:
             pick = store.take(kind, rng.random())
@@ -115,6 +118,25 @@ def create_app(
         except (sources.Unavailable, httpx.HTTPError, asyncio.TimeoutError, KeyError, ValueError, TypeError) as e:
             log.warning("source %s failed: %s: %s", kind, type(e).__name__, e)
             return None
+
+    async def todo_card(client: httpx.AsyncClient, rng: random.Random) -> dict | None:
+        """An open to-do item that fits the moment, with how long it takes."""
+        try:
+            items = await sources.todo_items(client, settings)
+            if not items:
+                return None
+            await curator.estimate_todos(client, settings, store, items)  # only new or changed items
+        except (httpx.HTTPError, sources.Unavailable, ValueError) as e:
+            log.warning("todo failed: %s: %s", type(e).__name__, e)
+            return None
+        known = store.todo_estimates()
+        hour = datetime.now().hour
+        ready = [(i, known[i["id"]]) for i in items
+                 if i["id"] in known and known[i["id"]]["text_hash"] == sources.todo_text_hash(i)]
+        if not ready:
+            return None
+        item, est = rng.choices(ready, weights=[sources.todo_fits(e["minutes"], hour) for _, e in ready])[0]
+        return sources.todo_card(settings, item, est).to_dict()
 
     @app.get("/healthz")
     async def healthz():

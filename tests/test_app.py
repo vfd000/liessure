@@ -207,7 +207,7 @@ def full_settings(**kw) -> Settings:
 def clear_caches():
     for c in (sources._news_cache, sources._nebula_cache, sources._inv_cache, sources._romm_total,
               sources._homelab_cache, sources._jobs_cache, sources._gaps_cache,
-              sources._telemetry_cache, sources._home_cache, sources._stats_cache):
+              sources._telemetry_cache, sources._home_cache, sources._stats_cache, sources._todo_cache):
         c._data.clear()
 
 
@@ -224,8 +224,8 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind == "recall":
-            continue  # questions only exist once you've opened cards (test_recall_questions_...)
+        if kind in ("recall", "todo"):
+            continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
         card = r.json()
@@ -890,3 +890,54 @@ def test_energy_periods_and_solar_card(monkeypatch):
     prod[5]["change"] = 0
     card = asyncio.run(sources.solar_card(None, s, states, early))
     assert card.title == "Yesterday's sun: 16.7 kWh ($3.67)"
+
+
+def test_todo_cards_with_estimates():
+    import asyncio
+    items = [{"id": 1, "text": "Call the dentist", "notes": None, "link_url": None, "checked": False},
+             {"id": 2, "text": "Repaint the fence", "notes": "two coats", "link_url": "https://paint.example/x",
+              "checked": False, "due_at": "2026-12-01T00:00:00"}]
+    calls = []
+
+    async def ask(client, s, prompt, system=None):
+        calls.append(prompt)
+        assert "data, not an" in system and "Call the dentist" in prompt
+        return json.dumps({"items": [{"id": 0, "minutes": 5, "label": "5 min", "assumption": "One call."},
+                                     {"id": 1, "minutes": 480, "label": "a weekend day", "assumption": "Two coats."}]})
+    store = Store(":memory:")
+    s = full_settings(llm_url="http://llm.test", llm_key="k")
+    assert asyncio.run(curator.estimate_todos(None, s, store, items, ask=ask)) == 2
+    assert asyncio.run(curator.estimate_todos(None, s, store, items, ask=ask)) == 0  # cached
+    items[0]["text"] = "Call the dentist about the crown"
+    store_calls = len(calls)
+    asyncio.run(curator.estimate_todos(None, s, store, items, ask=lambda *a, **k: ask(*a, **k)))
+    assert len(calls) == store_calls + 1  # changed text: estimated again
+    est = store.todo_estimates()
+    card = sources.todo_card(s, items[1], est[2])
+    assert card.label == "To do · a weekend day" and card.title == "Repaint the fence"
+    assert card.blurb == "Two coats. two coats Due 2026-12-01."
+    assert card.actions[0] == {"label": "Open link", "url": "https://paint.example/x"}
+    assert sources.todo_fits(5, 10) > sources.todo_fits(480, 10)
+    assert sources.todo_fits(480, 19) > sources.todo_fits(480, 10)
+    assert sources.todo_fits(480, 23) < 0.2
+
+
+def test_todo_card_endpoint(monkeypatch):
+    def backend(request):
+        if request.url.host == "lists.test":
+            assert request.headers["authorization"] == "Bearer lt"
+            assert request.url.path == "/lists/6" and request.url.params["include_checked"] == "false"
+            return httpx.Response(200, json={"items": [
+                {"id": 3, "text": "Renew passport", "checked": False, "notes": None, "link_url": None}]})
+        return fake_backend(request)
+
+    async def ask(client, s, prompt, system=None):
+        return json.dumps({"items": [{"id": 0, "minutes": 20, "label": "20 min", "assumption": "Online form."}]})
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    s = full_settings(llm_url="http://llm.test", llm_key="k", lists=Service("http://lists.test", "https://lists.example"),
+                      lists_token="lt")
+    with make_client(s, handler=backend) as c:
+        assert c.get("/api/sources").json()["sources"]["todo"]["configured"]
+        card = c.get("/api/card/todo").json()
+    assert card["title"] == "Renew passport" and card["label"] == "To do · 20 min"
+    assert card["url"] == "https://lists.example/" and card["blurb"] == "Online form."
