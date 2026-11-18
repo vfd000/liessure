@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS sessions (          -- signed-in browsers: sha256 of 
     token_hash TEXT PRIMARY KEY, sub TEXT NOT NULL, user TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
     exp REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS math_help (       -- help used on a math problem: hint, fix (LLM), tutor (Claude)
+    ts REAL NOT NULL, user TEXT NOT NULL, ref TEXT NOT NULL, topic TEXT NOT NULL, kind TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS avoid (          -- topics a reader never wants (avoid.py)
     user TEXT NOT NULL, term TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (user, term)
 );
@@ -216,6 +219,11 @@ class Store:
                 "INSERT INTO math_attempts (ts, ref, topic, correct, tries, revealed, user) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (time.time(), ref[:64], topic[:40], int(correct), tries, int(revealed), user))
 
+    def record_math_help(self, ref: str, topic: str, kind: str, user: str = "owner") -> None:
+        with self._lock, self._db:
+            self._db.execute("INSERT INTO math_help (ts, user, ref, topic, kind) VALUES (?, ?, ?, ?, ?)",
+                             (time.time(), user, ref[:64], topic[:40], kind[:10]))
+
     def math_stats(self, now: float | None = None, user: str = "owner") -> dict[str, Any]:
         """Today, this week (from Monday), the daily streak and the weakest topic of the last 30 days.
         Days are local to the server (the CT runs on household time)."""
@@ -230,9 +238,15 @@ class Store:
                 (user, now - 400 * 86400)
             ).fetchall()
 
+        with self._lock:
+            helps = self._db.execute(
+                "SELECT ts, ref, topic, kind FROM math_help WHERE user = ? AND ts >= ?", (user, now - 400 * 86400)
+            ).fetchall()
+
         def tally(since: float) -> dict[str, int]:
             sel = [r for r in rows if r["ts"] >= since]
-            return {"tried": len(sel), "right": sum(r["correct"] for r in sel)}
+            return {"tried": len(sel), "right": sum(r["correct"] for r in sel),
+                    "helped": len({h["ref"] for h in helps if h["ts"] >= since})}
         solved_days = {_dt.date.fromtimestamp(r["ts"]) for r in rows if r["correct"]}
         streak, day = 0, today if today in solved_days else today - _dt.timedelta(days=1)
         while day in solved_days:
@@ -244,8 +258,18 @@ class Store:
                 by_topic.setdefault(r["topic"], []).append(r["correct"])
         rated = {t: sum(v) / len(v) for t, v in by_topic.items() if len(v) >= 3}
         weakest = min(rated, key=rated.get) if rated else ""
+        help_by_topic: dict[str, int] = {}
+        for h in helps:
+            if h["ts"] >= now - 30 * 86400 and h["topic"]:
+                help_by_topic[h["topic"]] = help_by_topic.get(h["topic"], 0) + 1
+        kinds: dict[str, int] = {}
+        for h in helps:
+            if h["ts"] >= now - 30 * 86400:
+                kinds[h["kind"]] = kinds.get(h["kind"], 0) + 1
+        most_help = max(help_by_topic, key=help_by_topic.get) if help_by_topic else ""
         return {"today": tally(midnight), "week": tally(monday), "all": tally(0), "streak_days": streak,
-                "weakest": weakest, "weakest_rate": round(rated[weakest], 2) if weakest else None}
+                "weakest": weakest, "weakest_rate": round(rated[weakest], 2) if weakest else None,
+                "most_help": most_help, "help_30d": kinds}
 
     # --- to-do estimates
     def todo_estimates(self) -> dict[int, dict[str, Any]]:

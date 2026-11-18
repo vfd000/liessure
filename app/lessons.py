@@ -105,9 +105,11 @@ async def _phrases(client: httpx.AsyncClient, s: Settings, prefs: dict[str, Any]
     prompt = (f"Write 5 short, useful, beginner {learn['name']} sentences (themes: {', '.join(themes)}) for a "
               f"learner whose language is {mine}. For each: the sentence in {learn['name']} script, its "
               f"romanization, a natural {mine} translation, each word or particle with its romanization and "
-              f"{mine} meaning, and one short note in {mine} (grammar or politeness). Shape: "
+              f"{mine} meaning, one short note in {mine} (grammar or politeness), and three plausible but "
+              f"wrong {mine} translations to quiz with. Shape: "
               '{"items": [{"text": "...", "romanization": "...", "translation": "...", '
-              '"words": [{"word": "...", "romanization": "...", "meaning": "..."}], "note": "..."}]}')
+              '"words": [{"word": "...", "romanization": "...", "meaning": "..."}], "note": "...", '
+              '"wrong": ["...", "...", "..."]}]}')
     data = curator._json_object(await ask(client, s, prompt, system=LESSON_SYSTEM))
     labels = {**LESSON_LABELS.get(prefs.get("lang", ""), {}), **prefs.get("labels", {})}
     to = prefs.get("lang", "es")
@@ -123,11 +125,23 @@ async def _phrases(client: httpx.AsyncClient, s: Settings, prefs: dict[str, Any]
                 details.append({"label": f"{w['word']}{rom}"[:80], "value": str(w["meaning"])[:200]})
         if row.get("note"):
             details.append({"label": labels.get("note", "Note"), "value": str(row["note"])[:300]})
+        # Ask what it means: the right translation among the wrong ones (when the LLM gave three).
+        translation = " ".join(str(row.get("translation", "")).split())[:200]
+        wrong = [" ".join(str(w).split())[:200] for w in (row.get("wrong") or []) if str(w).strip()]
+        wrong = [w for w in dict.fromkeys(wrong) if w != translation][:3]
+        quiz: dict[str, Any] = {}
+        if translation and len(wrong) == 3:
+            choices = wrong + [translation]
+            rng.shuffle(choices)
+            quiz = {"choices": choices, "answer": choices.index(translation),
+                    "solution": " · ".join(f"{d['label']}: {d['value']}" for d in details[1:4])}
         card = sources.Card(
             kind="lesson", label=f"{learn.get('label', learn['name'])} · {labels.get('phrase', 'phrase')}",
             title=text, subtitle=str(row.get("romanization", ""))[:200],
-            blurb=labels.get("llm", "Written by the LLM."),
+            blurb=(labels.get("ask", "What does it mean?") + " " if quiz else "") + labels.get("llm", "Written by the LLM."),
+            quiz=quiz,
             url=_translate_url(text, learn["code"], to), open_in_app=True,
+            translate={"text": text, "from": _speech(learn["code"])[1], "to": to},
             open_label=labels.get("translate", "Translate"),
             details=details, details_label=labels.get("explain", "Explain"),
             actions=[_hear(text, learn["code"], to, labels.get("hear", "Hear it"))],
