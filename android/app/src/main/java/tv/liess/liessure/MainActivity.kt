@@ -22,6 +22,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -259,6 +260,14 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun retry() = runOnUiThread { loadFor(intent) }
 
+        /** Pick a .p12 file and hand it to Android's certificate installer (it asks for the password). */
+        @JavascriptInterface
+        fun installCert() = runOnUiThread { pickCert() }
+
+        /** Forget the remembered certificate so the next request asks again. */
+        @JavascriptInterface
+        fun chooseCertAgain() = runOnUiThread { forgetCert() }
+
         /** Show a page (Jellyfin's item page) inside the app; Back returns to the feed. */
         @JavascriptInterface
         fun openInApp(url: String) = runOnUiThread {
@@ -314,14 +323,19 @@ class MainActivity : Activity() {
                 view.loadUrl(request.url.toString())
                 return
             }
-            val html = """
-                <html><body style="background:#14161a;color:#eceae6;font-family:sans-serif;
-                  display:flex;flex-direction:column;align-items:center;justify-content:center;height:90vh">
-                <p>Couldn't reach Liessure.</p><p style="color:#9aa0a8;font-size:14px">${error.description}</p>
-                <button style="font-size:16px;padding:10px 18px;border-radius:8px;border:0;background:#7cc4ad"
-                  onclick="LiessureAndroid.retry()">Try again</button></body></html>
-            """.trimIndent()
-            view.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+            showHelp(view, "Couldn't reach Liessure.", error.description.toString())
+        }
+
+        override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+            if (!request.isForMainFrame || errorResponse.statusCode != 403) return
+            val reason = errorResponse.responseHeaders?.entries
+                ?.firstOrNull { it.key.equals("x-gatekeeper-reason", ignoreCase = true) }?.value.orEmpty()
+            if ("client-cert" in reason) {
+                // Off the home network the gatekeeper wants this phone's client certificate, and got none.
+                showHelp(view, "This phone didn't show a certificate.",
+                    "Away from home, Liessure needs your client certificate in Android's credential store " +
+                        "(Firefox keeps its own, which other apps can't use). Install the .p12 file once, then try again.")
+            }
         }
 
         override fun onReceivedClientCertRequest(view: WebView, request: ClientCertRequest) {
@@ -336,6 +350,65 @@ class MainActivity : Activity() {
             } else {
                 chooseCert(request)
             }
+        }
+    }
+
+    /** A small page of our own, with ways out: install or re-pick the certificate, or try again. */
+    private fun showHelp(view: WebView, title: String, detail: String) {
+        val esc = { s: String -> s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") }
+        val btn = "font-size:16px;padding:10px 18px;border-radius:8px;border:0;margin:6px;"
+        val html = """
+            <html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+            <body style="background:#14161a;color:#eceae6;font-family:sans-serif;padding:24px;
+              display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:85vh;text-align:center">
+            <p style="font-size:18px">${esc(title)}</p><p style="color:#9aa0a8;font-size:14px;max-width:30em">${esc(detail)}</p>
+            <button style="${btn}background:#7cc4ad" onclick="LiessureAndroid.retry()">Try again</button>
+            <button style="${btn}background:#2a2e35;color:#eceae6" onclick="LiessureAndroid.installCert()">Install certificate</button>
+            <button style="${btn}background:#2a2e35;color:#eceae6" onclick="LiessureAndroid.chooseCertAgain()">Choose another certificate</button>
+            </body></html>
+        """.trimIndent()
+        view.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+    }
+
+    private fun pickCert() {
+        val pick = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*")
+            .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/x-pkcs12", "application/pkcs12", "application/octet-stream"))
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(pick, PICK_CERT)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "No file picker on this phone", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun forgetCert() {
+        prefs.edit().remove("cert_alias").apply()
+        // The WebView also remembers a choice per host; clear it so the picker shows again.
+        WebView.clearClientCertPreferences { loadFor(intent) }
+    }
+
+    @Deprecated("Activity results; fine for two one-off requests")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        when (requestCode) {
+            PICK_CERT -> {
+                val uri = data?.data
+                if (resultCode != RESULT_OK || uri == null) return
+                val bytes = runCatching { contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+                if (bytes == null || bytes.isEmpty() || bytes.size > 1_000_000) {
+                    Toast.makeText(this, "Couldn't read that file", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                val install = KeyChain.createInstallIntent()
+                    .putExtra(KeyChain.EXTRA_PKCS12, bytes)
+                    .putExtra(KeyChain.EXTRA_NAME, "Liessure")
+                @Suppress("DEPRECATION")
+                startActivityForResult(install, INSTALL_CERT)
+            }
+            INSTALL_CERT -> if (resultCode == RESULT_OK) forgetCert()
         }
     }
 
@@ -366,6 +439,8 @@ class MainActivity : Activity() {
     private companion object {
         const val SYMFONIUM = "app.symfonik.music.player"
         const val CLAUDE = "com.anthropic.claude"
+        const val PICK_CERT = 41
+        const val INSTALL_CERT = 42
         val OFFLINE_ERRORS = setOf(
             WebViewClient.ERROR_HOST_LOOKUP, WebViewClient.ERROR_CONNECT, WebViewClient.ERROR_TIMEOUT,
         )

@@ -268,6 +268,13 @@ tagged `v0.1.<run>` with the APK attached, which is what **Obtainium** tracks.
   text-to-speech (install the language's voice in Android's TTS settings, e.g.
   Cantonese, Hindi, Telugu); with no voice it opens Google Translate, which reads
   any phrase aloud.
+- **Client certificate (away from home):** the app answers the gatekeeper's
+  mTLS check from Android's credential store (Firefox keeps its own store,
+  which other apps can't read). When the gatekeeper turns the app away for a
+  missing certificate, the app shows **Install certificate** (pick the `.p12`;
+  Android asks for its password and stores it) and **Choose another
+  certificate**. Signing in through `sso.liess.tv` off the home network still
+  needs the gatekeeper's IP authorisation once per 30-day session.
 - **Catching Reddit links:** Settings → Apps → Liessure → Open by default →
   Add link → tick the reddit hosts. (Reddit's own app, if installed, has to
   be uninstalled or have its link handling turned off.) Then put Liessure where
