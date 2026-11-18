@@ -87,6 +87,29 @@ function renderCard(c) {
   if (c.quiz && (c.quiz.choices || c.quiz.answer !== undefined)) body.append(renderQuiz(c));
 
   const actions = el("div", "actions");
+  if (c.more && c.more.url) {
+    // Long text (a job description) fetched the first time it's opened, shown as text.
+    const box = el("div", "more");
+    box.hidden = true;
+    const btn = el("button", "", c.more.label || "More");
+    let loaded = false;
+    btn.onclick = async () => {
+      box.hidden = !box.hidden;
+      btn.textContent = box.hidden ? (c.more.label || "More") : "Hide";
+      if (box.hidden || loaded) return;
+      box.textContent = "Loading…";
+      try {
+        const r = await fetch(c.more.url);
+        if (!r.ok) throw new Error(r.status);
+        box.textContent = (await r.json()).text || "Nothing to show.";
+        loaded = true;
+      } catch {
+        box.textContent = "Couldn't load it right now.";
+      }
+    };
+    actions.append(btn);
+    body.append(box);
+  }
   if ((c.details && c.details.length) || (c.photo && c.photo.id)) {
     const more = el("div", "details");
     more.hidden = true;

@@ -137,7 +137,8 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
         if path.startswith("/api/jobs/"):
             n = int(path.rsplit("/", 1)[1])
             gaps = ["Kubernetes in production", "Go"] if n != 2 else ["kubernetes in production!"]
-            return httpx.Response(200, json={**job(n), "score_detail": {"gaps": gaps}})
+            return httpx.Response(200, json={**job(n), "score_detail": {"gaps": gaps},
+                                             "jd_text": f"About the role {n}.\nYou will secure things."})
         if path == "/api/pipeline":
             return httpx.Response(200, json={"board": {"interviewing": [
                 job(9, status="interviewing", next_step="Onsite loop", next_step_on="2026-11-18T09:00:00")]}})
@@ -1306,4 +1307,19 @@ def test_phrack_reader_reflows_text(client):
     assert "writing &amp; more.</p>" in h
     assert "<pre>    int main(void) {\n        return 0;\n    }</pre>" in h
     assert client.get("/read/phrack/73/..%2Fetc").status_code == 404
+
+
+def test_job_cards_expand_to_the_description(client):
+    card = None
+    for _ in range(20):
+        c = client.get("/api/card/job")
+        if c.status_code == 200:
+            card = c.json()
+            break
+    if card is None:  # weekends without a due step: no job card, check the endpoint directly
+        card = {"more": {"url": "/api/job/1/description"}}
+    assert card["more"]["url"].startswith("/api/job/")
+    r = client.get(card["more"]["url"])
+    assert r.status_code == 200 and r.json()["text"].startswith("About the role")
+    assert client.get("/api/job/abc/description").status_code == 422
 
