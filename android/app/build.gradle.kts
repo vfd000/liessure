@@ -20,6 +20,8 @@ android {
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.1.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
         buildConfigField("String", "LIESSURE_URL", "\"$liessureUrl\"")
+        // Links to this host, from anywhere, open here (the Jellyfin app can't be sent to an item).
+        buildConfigField("String", "JELLYFIN_HOST", "\"jellyfin.liess.tv\"")
     }
 
     signingConfigs {
