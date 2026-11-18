@@ -83,7 +83,11 @@ def create_app(
         if settings.curator_enabled and rng.random() < settings.curator_share:
             pick = store.take(kind, rng.random())
             if pick:
-                return {**pick["card"], "why": pick["reason"]}
+                card = {**pick["card"], "why": pick["reason"]}
+                if any(a.get("url", "").startswith("https://forvo.com/search/") for a in card.get("actions") or []):
+                    # Phrase cards curated before per-word links: Forvo's search finds no sentences.
+                    card["actions"] = curator.forvo_actions(card["title"], "")
+                return card
         try:
             s = await profiles.get(client)  # the graph's languages, home and interests, or the env fallback
             card = await asyncio.wait_for(sources.SOURCES[kind](client, s, rng), PER_CARD_TIMEOUT)

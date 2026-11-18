@@ -496,6 +496,16 @@ def test_photo_without_vision_sends_text_only():
         assert isinstance(body["messages"][1]["content"], str)
 
 
+def test_forvo_links_are_per_word():
+    one = curator.forvo_actions("नमस्ते", "hi")
+    assert len(one) == 1 and one[0]["label"] == "Hear it on Forvo"
+    assert one[0]["url"].startswith("https://forvo.com/word/%E0%A4") and one[0]["url"].endswith("/#hi")
+    many = curator.forvo_actions("एक, दो, तीन, चार, पाँच", "hi")
+    assert [a["label"] for a in many] == ["Hear एक", "Hear दो", "Hear तीन", "Hear चार"]
+    assert all(a["url"].startswith("https://forvo.com/word/") and "%2C" not in a["url"] for a in many)
+    assert curator.forvo_actions("早晨！", "zh-yue")[0]["url"].endswith("/#yue")
+
+
 def test_phrase_cards():
     calls = []
     c, store = curated_client(calls)
