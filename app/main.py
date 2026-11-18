@@ -52,6 +52,11 @@ def pick_kinds(weights: dict[str, int], available: dict[str, bool], n: int, rng:
     return picked
 
 
+class CardState(BaseModel):
+    card: dict = Field(...)
+    state: str = Field(pattern="^(done|later|)$")
+
+
 class AvoidTerm(BaseModel):
     term: str = Field(min_length=1, max_length=60)
 
@@ -290,9 +295,10 @@ def create_app(
     async def one(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
         """A card, skipping (up to three tries) anything on the reader's not-interested list."""
         terms = store.avoid_list(user)
+        done = store.done_keys(user)
         for _ in range(3):
             card = await _one(client, kind, rng, user)
-            if card is None or not avoid.matches(terms, card):
+            if card is None or (not avoid.matches(terms, card) and store.card_key(card) not in done):
                 return card
         return None
 
@@ -545,7 +551,11 @@ def create_app(
             fallback = await one(client, "wikipedia", rng, user)
             if fallback:
                 out.append(fallback)
-        store.remember_shown(out, user)  # so it can be found again (/api/history)
+        # A 'later' card that's due comes back (one per load, at a random spot).
+        again = store.due_later(user)
+        if again and not kinds:
+            out.insert(rng.randint(0, len(out)), {**again, "again": True})
+        store.remember_shown([c for c in out if not c.get("again")], user)  # so it can be found again (/api/history)
         return {"cards": out}
 
     @app.get("/api/card/{kind}")
@@ -556,6 +566,19 @@ def create_app(
         if not c:
             raise HTTPException(503, f"{kind} has nothing right now")
         return c
+
+    @app.post("/api/card-state")
+    async def card_state(request: Request, s: CardState):
+        """Swiped: 'done' (off the feed, onto the Done list), 'later' (the Later list, and back in the feed on a
+        spaced schedule), or '' to put it back to normal."""
+        store.set_state(s.card, s.state, request.state.user)
+        return Response(status_code=204)
+
+    @app.get("/api/lists/{state}")
+    async def state_list(request: Request, state: str):
+        if state not in ("done", "later"):
+            raise HTTPException(404)
+        return {"cards": store.state_list(state, request.state.user)}
 
     @app.get("/api/history")
     async def history(request: Request, q: str = Query("", max_length=200), limit: int = Query(40, ge=1, le=100)):

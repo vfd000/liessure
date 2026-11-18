@@ -1655,3 +1655,33 @@ def test_old_phrase_cards_without_a_quiz_are_dropped():
         assert c is None or c["title"] == "你好"
     assert "lesson:zh:old" in st.known(lessons.pool("owner")) and st.pool_size(lessons.pool("owner")) <= 1
 
+
+def test_swiped_cards_go_to_done_and_later_lists():
+    import time as _t
+    with make_client(full_settings()) as c:
+        cards = c.get("/api/feed?n=6").json()["cards"]
+        done, later = cards[0], cards[1]
+        assert c.post("/api/card-state", json={"card": done, "state": "done"}).status_code == 204
+        assert c.post("/api/card-state", json={"card": later, "state": "later"}).status_code == 204
+        assert c.post("/api/card-state", json={"card": later, "state": "nope"}).status_code == 422
+        assert [x["title"] for x in c.get("/api/lists/done").json()["cards"]] == [done["title"]]
+        lst = c.get("/api/lists/later").json()["cards"]
+        assert [x["title"] for x in lst] == [later["title"]] and lst[0]["due"] > _t.time()
+        st = c.app.state.store
+        assert st.card_key(done) in st.done_keys()
+        # Not due yet: no 'again' card. Make it due: it comes back, marked, and moves further out.
+        assert not any(x.get("again") for x in c.get("/api/feed?n=6").json()["cards"])
+        st._db.execute("UPDATE history SET due = 0 WHERE state = 'later'")
+        back = [x for x in c.get("/api/feed?n=6").json()["cards"] if x.get("again")]
+        assert [x["title"] for x in back] == [later["title"]]
+        assert c.get("/api/lists/later").json()["cards"][0]["due"] > _t.time() + 2 * 86400  # next: 3 days
+        # Put the done card back to normal.
+        c.post("/api/card-state", json={"card": done, "state": ""})
+        assert c.get("/api/lists/done").json()["cards"] == []
+        assert c.get("/api/lists/bogus").status_code == 404
+    st = Store(":memory:")
+    st.HISTORY_MAX = 2
+    st.set_state({"kind": "news", "ref": "keep", "title": "Keep me"}, "later")
+    st.remember_shown([{"kind": "news", "ref": str(n), "title": f"S{n}"} for n in range(5)])
+    assert st.state_list("later")[0]["title"] == "Keep me"  # trimming history never drops a swiped card
+

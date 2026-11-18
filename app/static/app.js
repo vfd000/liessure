@@ -17,7 +17,9 @@ const UI = {
     "Wikipedia": "Wikipedia", "News": "Noticias", "Videos": "Vídeos", "Movies": "Películas", "Series": "Series",
     "Music": "Música", "Photos": "Fotos", "Math": "Mates", "Recall": "Repaso", "Bite-size": "Bocados",
     "Lessons": "Lecciones", "Home": "Casa", "Languages": "Idiomas", "Careers": "Carreras",
-    "Search cards you've seen": "Buscar tarjetas que ya viste", "Found": "Encontradas",
+    "Search cards you've seen": "Buscar tarjetas que ya viste", "Later": "Después", "Done": "Hecho",
+    "Done ✓": "Hecho ✓", "Later ↻": "Después ↻", "Back again": "De nuevo", "empty": "vacío",
+    "Back to the feed": "Volver al feed", "Remove from Later": "Quitar de Después", "Found": "Encontradas",
     "Nothing found.": "No hay resultados.",
     "Not interested": "No me interesa", "Right!": "¡Correcto!", "Not quite.": "Casi, pero no.",
     "Right. You remembered it.": "Correcto. Lo recordaste.", "Not quite. It'll come back sooner.": "Casi. Volverá pronto.",
@@ -100,7 +102,10 @@ function renderCard(c) {
     img.onerror = () => img.remove();
     card.append(img);
   }
+  if (c.again) card.classList.add("again");
+  enableSwipe(card, c);
   const body = el("div", "body");
+  if (c.again) body.append(el("div", "label", "↻ " + t("Back again")));
   const nope = el("button", "nope", "✕");
   nope.title = nope.ariaLabel = t("Not interested");
   nope.onclick = () => notInterested(c, card);
@@ -241,6 +246,48 @@ function renderCard(c) {
 
   if (c.image) card.querySelector(".media").onclick = () => { report(c, "open"); openUrl(c.url, c.open_in_app); };
   return card;
+}
+
+// Swipe a card: left = done (off the feed, onto the Done list), right = later (the Later list, and back in
+// the feed on a spaced schedule). Only clearly sideways drags count, so scrolling and pull-down still work.
+function enableSwipe(cardEl, c) {
+  let x0 = null, y0 = 0, dx = 0, sideways = false;
+  const hint = el("div", "swipe-hint");
+  cardEl.append(hint);
+  cardEl.addEventListener("touchstart", (e) => {
+    if (e.target.closest("canvas, pre, input, textarea, iframe, audio, .quiz")) { x0 = null; return; }
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; sideways = false;
+  }, { passive: true });
+  cardEl.addEventListener("touchmove", (e) => {
+    if (x0 === null) return;
+    dx = e.touches[0].clientX - x0;
+    const dy = e.touches[0].clientY - y0;
+    if (!sideways && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.5) sideways = true;
+    if (!sideways) return;
+    cardEl.style.transform = `translateX(${dx}px)`;
+    cardEl.style.opacity = String(Math.max(0.35, 1 - Math.abs(dx) / 400));
+    hint.textContent = dx < 0 ? t("Done ✓") : t("Later ↻");
+    hint.className = "swipe-hint " + (dx < 0 ? "left" : "right");
+  }, { passive: true });
+  cardEl.addEventListener("touchend", () => {
+    if (x0 === null) return;
+    x0 = null;
+    if (sideways && Math.abs(dx) > 110) {
+      const state = dx < 0 ? "done" : "later";
+      cardEl.style.transition = "transform .2s, opacity .2s";
+      cardEl.style.transform = `translateX(${dx < 0 ? -600 : 600}px)`;
+      cardEl.style.opacity = "0";
+      setTimeout(() => cardEl.remove(), 200);
+      fetch("/api/card-state", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ card: { ...c, again: undefined, due: undefined }, state }) }).catch(() => {});
+    } else {
+      cardEl.style.transition = "transform .15s, opacity .15s";
+      cardEl.style.transform = "";
+      cardEl.style.opacity = "";
+      hint.className = "swipe-hint";
+      setTimeout(() => { cardEl.style.transition = ""; }, 160);
+    }
+  }, { passive: true });
 }
 
 // "Not interested": hide this card, and (optionally) never show its topic again.
@@ -753,6 +800,32 @@ document.getElementById("search").onclick = () => {
   searchbar.hidden = !searchbar.hidden;
   if (!searchbar.hidden) q.focus(); else if (searching) reset();
 };
+// The two swipe lists: Later (also comes back by itself) and Done (out of the feed for good).
+async function showList(state) {
+  searching = true;
+  generation++;
+  let cards = [];
+  try { cards = (await (await fetch(`/api/lists/${state}`)).json()).cards; } catch {}
+  const title = state === "later" ? t("Later") : t("Done");
+  feed.replaceChildren(el("div", "offline", cards.length ? `${title}: ${cards.length}` : `${title}: ${t("empty")}`));
+  for (const c of cards) {
+    const card = renderCard(c);
+    const back = el("button", "", state === "done" ? t("Back to the feed") : t("Remove from Later"));
+    back.onclick = () => {
+      fetch("/api/card-state", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ card: { ...c, due: undefined }, state: "" }) }).catch(() => {});
+      card.remove();
+    };
+    card.querySelector(".actions").append(back);
+    feed.append(card);
+  }
+  scrollTo({ top: 0 });
+}
+document.getElementById("list-later").onclick = () => showList("later");
+document.getElementById("list-done").onclick = () => showList("done");
+document.getElementById("list-later").textContent = "↻ " + t("Later");
+document.getElementById("list-done").textContent = "✓ " + t("Done");
+
 document.getElementById("search-close").onclick = () => { searchbar.hidden = true; q.value = ""; if (searching) reset(); };
 q.oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 300); };
 

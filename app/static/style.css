@@ -101,6 +101,11 @@ body {
 .searchbar { display: flex; gap: 8px; padding: 8px 12px; }
 .searchbar input { flex: 1; min-width: 0; font: inherit; padding: 8px 12px; border-radius: 18px;
   border: 1px solid currentColor; background: transparent; color: inherit; }
+.card { position: relative; touch-action: pan-y; }
+.swipe-hint { position: absolute; top: 12px; font-weight: 700; font-size: 15px; opacity: 0; pointer-events: none; }
+.swipe-hint.left { right: 16px; opacity: 1; color: #3fa37a; }
+.swipe-hint.right { left: 16px; opacity: 1; color: #d9a441; }
+.card.again { outline: 1px solid #d9a441; }
 .signout { text-decoration: none; color: inherit; }
 .ideas { width: min(560px, calc(100vw - 32px)); border: 0; border-radius: 12px; padding: 16px;
   background: var(--card, #1c1f24); color: inherit; }
