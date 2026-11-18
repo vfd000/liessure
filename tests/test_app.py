@@ -972,7 +972,7 @@ def test_math_progress_is_kept():
     # Two days ago and yesterday right; today one right, one revealed; probability is weak.
     for ago, topic, ok in [(2, "algebra", 1), (1, "algebra", 1), (0, "algebra", 1),
                            (0, "probability", 0), (0, "probability", 0), (0, "probability", 0)]:
-        st._db.execute("INSERT INTO math_attempts VALUES (?, 'r', ?, ?, 1, ?)", (now - ago * day, topic, ok, 1 - ok))
+        st._db.execute("INSERT INTO math_attempts (ts, ref, topic, correct, tries, revealed) VALUES (?, 'r', ?, ?, 1, ?)", (now - ago * day, topic, ok, 1 - ok))
     stats = st.math_stats(now)
     assert stats["today"] == {"tried": 4, "right": 1} and stats["streak_days"] == 3
     assert stats["weakest"] == "probability" and stats["weakest_rate"] == 0
@@ -1075,4 +1075,111 @@ def test_page_code_always_revalidates(client):
 def test_index_names_code_by_version(client):
     html = client.get("/").text
     assert re.search(r'src="/app\.js\?v=[0-9a-f]{10}"', html) and re.search(r'href="/style\.css\?v=[0-9a-f]{10}"', html)
+
+
+AXL, DANI, STRANGER = "387450248433827843", "388076739911221251", "999"
+
+
+def sso_backend(who):
+    """A fake Zitadel: discovery, token and userinfo. who[0] is the sub that signs in next."""
+    def handler(request):
+        if request.url.host == "sso.test":
+            p = request.url.path
+            if p == "/.well-known/openid-configuration":
+                return httpx.Response(200, json={"authorization_endpoint": "https://sso.test/oauth/v2/authorize",
+                                                 "token_endpoint": "https://sso.test/oauth/v2/token",
+                                                 "userinfo_endpoint": "https://sso.test/oidc/v1/userinfo"})
+            if p == "/oauth/v2/token":
+                assert request.headers["authorization"].startswith("Basic ")
+                body = dict(x.split("=", 1) for x in request.content.decode().split("&"))
+                assert body["code"] == "c0de" and len(body["code_verifier"]) > 40
+                return httpx.Response(200, json={"access_token": "at-" + who[0]})
+            if p == "/oidc/v1/userinfo":
+                sub = request.headers["authorization"].removeprefix("Bearer at-")
+                return httpx.Response(200, json={"sub": sub, "given_name": {AXL: "Axl", DANI: "Dani"}.get(sub, "X")})
+        return fake_backend(request)
+    return handler
+
+
+def sign_in(c, who, sub):
+    from urllib.parse import parse_qs, urlparse
+    who[0] = sub
+    r = c.get("/auth/login", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("https://sso.test/oauth/v2/authorize?")
+    q = parse_qs(urlparse(r.headers["location"]).query)
+    assert q["code_challenge_method"] == ["S256"] and q["redirect_uri"] == ["https://liessure.example/auth/callback"]
+    return c.get("/auth/callback", params={"code": "c0de", "state": q["state"][0]}, follow_redirects=False)
+
+
+def sso_settings(**kw):
+    return full_settings(zitadel_issuer="https://sso.test", zitadel_client_id="cid", zitadel_client_secret="sec",
+                         zitadel_user_subs=[AXL, DANI], public_url="https://liessure.example", **kw)
+
+
+def test_sign_in_and_per_user_feeds():
+    who = [AXL]
+    app = create_app(sso_settings(), transport=httpx.MockTransport(sso_backend(who)), store=Store(":memory:"),
+                     run_curator=False)
+    with TestClient(app, base_url="https://testserver") as c:
+        # Signed out: the page goes to sign-in, the API says 401, static code and health stay public.
+        assert c.get("/", follow_redirects=False).headers["location"] == "/auth/login"
+        assert c.get("/api/feed").status_code == 401
+        assert c.get("/app.js").status_code == 200 and c.get("/healthz").status_code == 200
+        r = sign_in(c, who, AXL)
+        assert r.status_code == 303 and "liessure_session" in r.headers["set-cookie"]
+        assert "httponly" in r.headers["set-cookie"].lower() and "secure" in r.headers["set-cookie"].lower()
+        assert c.get("/api/me").json() == {"user": "owner", "name": "Axl", "owner": True, "sso": True}
+        assert c.get("/api/sources").json()["sources"]["job"]["configured"]
+        c.post("/api/math", json={"ref": "m", "topic": "algebra", "correct": True})
+
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        assert d.get("/api/me").json()["user"] == DANI
+        srcs = d.get("/api/sources").json()["sources"]
+        assert not srcs["job"]["configured"] and not srcs["telemetry"]["configured"] and srcs["math"]["configured"]
+        assert d.get("/api/card/job").status_code == 503
+        kinds = {x["kind"] for x in d.get("/api/feed?n=12").json()["cards"]}
+        assert not kinds & {"job", "skill", "todo", "telemetry"}
+        assert d.get("/api/math/stats").json()["all"]["tried"] == 0  # her own progress, not axl's
+        d.post("/api/event", json={"kind": "wikipedia", "ref": "Seoul", "action": "open", "title": "Seoul",
+                                   "text": "Capital.", "url": "https://en.wikipedia.org/wiki/Seoul"})
+        rows = app.state.store.cards_to_ask(min_age_hours=0)
+        assert [(r["user"], r["ref"]) for r in rows] == [(DANI, "Seoul")]
+        assert app.state.store.events_since(1) == []  # her opens don't steer axl's curator
+
+    with TestClient(app, base_url="https://testserver") as x:
+        r = sign_in(x, who, STRANGER)
+        assert r.status_code == 403 and "set-cookie" not in r.headers
+        assert x.get("/api/feed").status_code == 401
+
+    # Taking someone off the allowlist ends their live session.
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        app.state.sso.allowed.discard(DANI)
+        assert d.get("/api/feed").status_code == 401
+        assert d.get("/auth/logout", follow_redirects=False).status_code == 303
+
+
+def test_old_database_is_migrated_to_the_owner(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    db = sqlite3.connect(path)
+    db.executescript("""
+        CREATE TABLE events (ts REAL, kind TEXT, ref TEXT, action TEXT, title TEXT);
+        INSERT INTO events VALUES (1, 'wikipedia', 'X', 'open', 'X');
+        CREATE TABLE seen (kind TEXT NOT NULL, ref TEXT NOT NULL, title TEXT NOT NULL, subtitle TEXT NOT NULL DEFAULT '',
+            text TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', ts REAL NOT NULL,
+            asked INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (kind, ref));
+        INSERT INTO seen VALUES ('wikipedia', 'X', 'X', '', 't', 'https://en.wikipedia.org/wiki/X', 1, 0);
+        CREATE TABLE math_attempts (ts REAL NOT NULL, ref TEXT NOT NULL, topic TEXT NOT NULL, correct INTEGER NOT NULL,
+            tries INTEGER NOT NULL, revealed INTEGER NOT NULL);
+        INSERT INTO math_attempts VALUES (strftime('%s','now'), 'm', 'algebra', 1, 1, 0);
+    """)
+    db.commit()
+    db.close()
+    st = Store(path)
+    assert st.cards_to_ask(min_age_hours=0)[0]["user"] == "owner"
+    assert st._db.execute("SELECT user FROM events").fetchone()[0] == "owner"
+    assert st.math_stats()["all"]["tried"] == 1
+    Store(path)  # opening it again is a no-op
 

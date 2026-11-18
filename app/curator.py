@@ -749,10 +749,10 @@ async def generate_recall_questions(client: httpx.AsyncClient, s: Settings, stor
         if len(choices) != 4 or len(set(choices)) != 4 or not 0 <= answer < 4 or not question:
             continue
         store.add_recall(card["kind"], card["ref"], question, choices, answer,
-                         " ".join(str(q.get("explain", "")).split())[:300])
+                         " ".join(str(q.get("explain", "")).split())[:300], user=card.get("user") or "owner")
         made += 1
     for c in cards:
-        store.mark_asked(c["kind"], c["ref"])  # skipped ones too: don't ask the LLM about them again
+        store.mark_asked(c["kind"], c["ref"], c.get("user") or "owner")  # skipped ones too: don't ask the LLM about them again
     return made
 
 

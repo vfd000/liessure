@@ -11,14 +11,14 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel, Field
 
-from . import curator, profile, sources
-from .config import KINDS, MAX_PER_LOAD, RECALL_KINDS, Settings
+from . import auth, curator, profile, sources
+from .config import KINDS, MAX_PER_LOAD, OWNER_ONLY_KINDS, RECALL_KINDS, Settings
 from .store import Store
 
 log = logging.getLogger("liessure")
@@ -121,15 +121,77 @@ def create_app(
     app.state.settings = settings
     app.state.store = store
     app.state.profiles = profiles
+    sso = auth.SSO(settings, store) if settings.sso_enabled else None
+    app.state.sso = sso
 
-    async def one(client: httpx.AsyncClient, kind: str, rng: random.Random) -> dict | None:
+    # Public without a session: health, sign-in itself, and the page's static code (no data in it).
+    PUBLIC = ("/healthz", "/auth/", "/app.js", "/style.css", "/sw.js", "/icon.svg", "/manifest.webmanifest")
+
+    @app.middleware("http")
+    async def who(request: Request, call_next):
+        if sso is None:
+            request.state.user, request.state.name = auth.OWNER, ""
+            return await call_next(request)
+        path = request.url.path
+        sess = sso.session(request.cookies.get(auth.COOKIE))
+        if sess is None and not any(path == p or (p.endswith("/") and path.startswith(p)) for p in PUBLIC):
+            if path == "/" or request.headers.get("accept", "").startswith("text/html"):
+                return RedirectResponse("/auth/login", status_code=303)
+            return JSONResponse({"detail": "sign in first"}, status_code=401)
+        request.state.user = sess["user"] if sess else ""
+        request.state.name = sess["name"] if sess else ""
+        return await call_next(request)
+
+    @app.get("/auth/login")
+    async def login(request: Request):
+        if sso is None:
+            return RedirectResponse("/", status_code=303)
+        return RedirectResponse(await sso.login_url(request.app.state.client), status_code=303)
+
+    @app.get("/auth/callback")
+    async def callback(request: Request):
+        if sso is None:
+            return RedirectResponse("/", status_code=303)
+        try:
+            token, _ = await sso.callback(request.app.state.client, dict(request.query_params))
+        except PermissionError as e:
+            return Response(f"Not signed in: {e}", status_code=403, media_type="text/plain")
+        except (ValueError, httpx.HTTPError, KeyError) as e:
+            log.warning("sign-in failed: %s: %s", type(e).__name__, e)
+            return Response("Sign-in didn't complete. <a href=/auth/login>Try again</a>.", status_code=400,
+                            media_type="text/html")
+        resp = RedirectResponse("/", status_code=303)
+        resp.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_TTL, httponly=True, secure=True, samesite="lax")
+        return resp
+
+    @app.get("/auth/logout")
+    async def logout(request: Request):
+        if sso is not None:
+            sso.logout(request.cookies.get(auth.COOKIE))
+        resp = RedirectResponse("/auth/login" if sso else "/", status_code=303)
+        resp.delete_cookie(auth.COOKIE)
+        return resp
+
+    @app.get("/api/me")
+    async def me(request: Request):
+        return {"user": request.state.user, "name": request.state.name, "owner": request.state.user == auth.OWNER,
+                "sso": sso is not None}
+
+    def kinds_for(user: str) -> set[str]:
+        """The owner sees everything; others don't see cards built from the owner's own services."""
+        return set(KINDS) if user == auth.OWNER else set(KINDS) - OWNER_ONLY_KINDS
+
+    async def one(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
+        if kind not in kinds_for(user):
+            return None
         if kind == "recall":
-            row = store.due_recall()
+            row = store.due_recall(user)
             return sources.recall_card(row).to_dict() if row else None
         if kind == "todo":
             return await todo_card(client, rng)
         # Mostly the curated pool; a share of uncurated cards keeps some surprise in it.
-        if settings.curator_enabled and rng.random() < settings.curator_share:
+        # The curated pool is picked for the owner's profile; others get fresh cards until per-user curation.
+        if user == auth.OWNER and settings.curator_enabled and rng.random() < settings.curator_share:
             pick = store.take(kind, rng.random())
             if pick:
                 card = {**pick["card"], "why": pick["reason"]}
@@ -171,7 +233,8 @@ def create_app(
 
     @app.get("/api/sources")
     async def list_sources(request: Request):
-        avail = sources.configured(settings)
+        mine = kinds_for(request.state.user)
+        avail = {k: v and k in mine for k, v in sources.configured(settings).items()}
         await profiles.get(request.app.state.client)
         return {
             "language": "Languages",
@@ -185,28 +248,29 @@ def create_app(
         }
 
     @app.post("/api/event", status_code=204)
-    async def event(e: Event):
+    async def event(request: Request, e: Event):
         """What you opened or played. Feeds the curator's 'recommended next' seeds."""
         if e.kind not in KINDS:
             raise HTTPException(400, "unknown kind")
-        store.record(e.kind, e.ref, e.action, e.title)
+        user = request.state.user
+        store.record(e.kind, e.ref, e.action, e.title, user=user)
         if e.kind in RECALL_KINDS and e.ref and e.title and e.url.startswith("https://"):
-            store.remember_card(e.kind, e.ref, e.title, e.subtitle, e.text, e.url)
+            store.remember_card(e.kind, e.ref, e.title, e.subtitle, e.text, e.url, user=user)
         return Response(status_code=204)
 
     @app.post("/api/recall/{recall_id}")
-    async def answer_recall(recall_id: int, a: RecallAnswer):
+    async def answer_recall(request: Request, recall_id: int, a: RecallAnswer):
         """You answered a recall question: right moves it to a longer interval, wrong starts it over."""
-        out = store.answer_recall(recall_id, a.correct)
+        out = store.answer_recall(recall_id, a.correct, request.state.user)
         if out is None:
             raise HTTPException(404, "no such question")
         return out
 
     @app.post("/api/math")
-    async def answer_math(a: MathAnswer):
+    async def answer_math(request: Request, a: MathAnswer):
         """A math card answered (or given up on): kept for progress, returns it."""
-        store.record_math(a.ref, a.topic, a.correct, a.tries, a.revealed)
-        return store.math_stats()
+        store.record_math(a.ref, a.topic, a.correct, a.tries, a.revealed, user=request.state.user)
+        return store.math_stats(user=request.state.user)
 
     @app.post("/api/photo/{asset_id}/identify")
     async def identify(request: Request, asset_id: str):
@@ -234,17 +298,17 @@ def create_app(
         return {"help": text[:2000]}
 
     @app.get("/api/math/stats")
-    async def math_stats():
-        return store.math_stats()
+    async def math_stats(request: Request):
+        return store.math_stats(user=request.state.user)
 
     @app.get("/api/recall/stats")
-    async def recall_stats():
-        return store.recall_stats()
+    async def recall_stats(request: Request):
+        return store.recall_stats(request.state.user)
 
     @app.post("/api/ideas", status_code=201)
-    async def add_idea(i: Idea):
+    async def add_idea(request: Request, i: Idea):
         """An improvement jotted down from the app's ideas button, kept to build later."""
-        return {"id": store.add_idea(i.text.strip(), i.about.strip())}
+        return {"id": store.add_idea(i.text.strip(), i.about.strip(), user=request.state.user)}
 
     @app.get("/api/ideas")
     async def list_ideas(status: str = ""):
@@ -276,17 +340,19 @@ def create_app(
         kinds: str = Query("", description="comma-separated subset of kinds"),
     ):
         rng = random.Random()
-        avail = sources.configured(settings)
+        user = request.state.user
+        mine = kinds_for(user)
+        avail = {k: v and k in mine for k, v in sources.configured(settings).items()}
         if kinds:
             wanted = {k.strip() for k in kinds.split(",")}
             avail = {k: v and k in wanted for k, v in avail.items()}
         plan = pick_kinds(settings.weights, avail, n, rng)
         client = request.app.state.client
-        cards = await asyncio.gather(*(one(client, k, rng) for k in plan))
+        cards = await asyncio.gather(*(one(client, k, rng, user) for k in plan))
         out = [c for c in cards if c]
         # Something always beats an empty screen.
         if not out and plan:
-            fallback = await one(client, "wikipedia", rng)
+            fallback = await one(client, "wikipedia", rng, user)
             if fallback:
                 out.append(fallback)
         return {"cards": out}
@@ -295,7 +361,7 @@ def create_app(
     async def card(request: Request, kind: str):
         if kind not in sources.SOURCES:
             raise HTTPException(404, "unknown kind")
-        c = await one(request.app.state.client, kind, random.Random())
+        c = await one(request.app.state.client, kind, random.Random(), request.state.user)
         if not c:
             raise HTTPException(503, f"{kind} has nothing right now")
         return c

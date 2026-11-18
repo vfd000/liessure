@@ -51,6 +51,9 @@ MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "t
 # Cards whose text is kept when you open or play them, to quiz you on later.
 RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video"})
 
+# Kinds only the owner sees: they read the owner's own services (jobs, lists, the lab).
+OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry"})
+
 # Kinds whose titles never go to the LLM as evidence of what you like.
 UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo"})
 
@@ -248,6 +251,19 @@ class Settings:
     # Home Assistant (energy from the Enphase Envoy, the weather).
     ha: Service = field(default_factory=Service)
     ha_token: str = ""
+    # Sign-in (Zitadel OIDC). Off unless the client id, secret and allowlist are all set.
+    zitadel_issuer: str = "https://sso.liess.tv"
+    zitadel_client_id: str = ""
+    zitadel_client_secret: str = ""
+    zitadel_user_subs: list[str] = field(default_factory=list)
+    # The person whose services Liessure reads and whose data predates multi-user (axl).
+    owner_sub: str = "387450248433827843"
+    public_url: str = "https://liessure.liess.tv"
+
+    @property
+    def sso_enabled(self) -> bool:
+        return bool(self.zitadel_client_id and self.zitadel_client_secret and self.zitadel_user_subs)
+
     # The household lists service (vfd000/lists): LISTS_TOKEN is its MCP_API_TOKEN. Read only here.
     lists: Service = field(default_factory=Service)
     lists_token: str = ""
@@ -329,6 +345,12 @@ class Settings:
             ha=svc("HA"),
             ha_token=_env("HA_TOKEN"),
             home_energy_rate=float(_env("HOME_ENERGY_RATE", "0.22")),
+            zitadel_issuer=_strip(_env("ZITADEL_ISSUER", "https://sso.liess.tv")),
+            zitadel_client_id=_env("ZITADEL_CLIENT_ID"),
+            zitadel_client_secret=_env("ZITADEL_CLIENT_SECRET"),
+            zitadel_user_subs=[x.strip() for x in _env("ZITADEL_USER_SUBS").split(",") if x.strip()],
+            owner_sub=_env("OWNER_SUB", cls.owner_sub),
+            public_url=_strip(_env("PUBLIC_URL", cls.public_url)),
             lists=svc("LISTS"),
             lists_token=_env("LISTS_TOKEN"),
             todo_list_id=int(_env("TODO_LIST_ID", "6")),

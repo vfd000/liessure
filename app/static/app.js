@@ -405,6 +405,7 @@ async function load(n = 6) {
     const q = new URLSearchParams({ n });
     if (filter.size) q.set("kinds", [...filter].join(","));
     const r = await fetch("/api/feed?" + q);
+    if (r.status === 401) { location.href = "/auth/login"; return; } // signed out (or the session ended)
     if (!r.ok) throw new Error(r.status);
     const { cards } = await r.json();
     if (gen !== generation) return;
@@ -471,6 +472,15 @@ function renderChips() {
 }
 
 document.getElementById("refresh").onclick = reset;
+
+// Signed in with SSO: say who, and offer sign-out.
+fetch("/api/me").then((r) => r.json()).then((me) => {
+  if (!me.sso) return;
+  const out = el("a", "icon signout", "⎋");
+  out.href = "/auth/logout";
+  out.title = out.ariaLabel = `Sign out${me.name ? " " + me.name : ""}`;
+  document.getElementById("refresh").before(out);
+}).catch(() => {});
 
 // Ideas: jot an improvement down without leaving the feed; they're kept on the server (/api/ideas).
 const ideas = document.getElementById("ideas");
