@@ -37,11 +37,13 @@ DEFAULT_WEIGHTS = {
     "homelab": 2,
     "job": 1,
     "skill": 1,
+    "telemetry": 1,
+    "home": 1,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1}
 
 # Kinds whose titles never go to the LLM as evidence of what you like.
 UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home"})
@@ -232,6 +234,15 @@ class Settings:
     jobs_token: str = ""
     jobs_min_score: int = 70
 
+    # Grafana on the telemetry LXC (alerts, and Prometheus through its datasource proxy).
+    grafana: Service = field(default_factory=Service)
+    grafana_token: str = ""
+    grafana_prom_uid: str = "PBFA97CFB590B2093"
+
+    # Home Assistant (energy from the Enphase Envoy, the weather).
+    ha: Service = field(default_factory=Service)
+    ha_token: str = ""
+
     @classmethod
     def from_env(cls) -> "Settings":
         def svc(prefix: str) -> Service:
@@ -299,6 +310,11 @@ class Settings:
             jobs=svc("JOBS"),
             jobs_token=_env("JOBS_TOKEN"),
             jobs_min_score=int(_env("JOBS_MIN_SCORE", "70")),
+            grafana=svc("GRAFANA"),
+            grafana_token=_env("GRAFANA_TOKEN"),
+            grafana_prom_uid=_env("GRAFANA_PROM_UID", cls.grafana_prom_uid),
+            ha=svc("HA"),
+            ha_token=_env("HA_TOKEN"),
         )
 
 

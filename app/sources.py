@@ -940,6 +940,239 @@ async def skill(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> C
     return card
 
 
+# ---------------------------------------------------------------- telemetry
+# Grafana on the telemetry LXC: its alerts, and a few trends from Prometheus
+# through Grafana's datasource proxy (Prometheus itself isn't reachable from
+# here). Needs a Viewer service-account token (GRAFANA_TOKEN).
+
+_telemetry_cache = _TTLCache(300)
+
+
+def _grafana_headers(s: Settings) -> dict[str, str]:
+    return {"Authorization": f"Bearer {s.grafana_token}"}
+
+
+async def firing_alerts(client: httpx.AsyncClient, s: Settings) -> list[dict[str, Any]]:
+    hit = _telemetry_cache.get("alerts")
+    if hit is not None:
+        return hit
+    r = await client.get(f"{s.grafana.url}/api/prometheus/grafana/api/v1/alerts", headers=_grafana_headers(s))
+    r.raise_for_status()
+    alerts = [a for a in ((r.json().get("data") or {}).get("alerts") or [])
+              if str(a.get("state", "")).lower() in ("alerting", "firing", "pending")]
+    _telemetry_cache.put("alerts", alerts)
+    return alerts
+
+
+async def promql(client: httpx.AsyncClient, s: Settings, query: str) -> list[dict[str, Any]]:
+    r = await client.get(f"{s.grafana.url}/api/datasources/proxy/uid/{s.grafana_prom_uid}/api/v1/query",
+                         params={"query": query}, headers=_grafana_headers(s))
+    r.raise_for_status()
+    return (r.json().get("data") or {}).get("result") or []
+
+
+def _days(sec: float) -> str:
+    d = sec / 86400
+    return f"{d:.0f} days" if d >= 2 else f"{sec / 3600:.0f} hours"
+
+
+# (title, PromQL returning one or more series, how to say the top one). The metric
+# names are the ones the telemetry stack records (docker/telemetry in vfd000/bb).
+TRENDS: list[tuple[str, str, Callable[[dict[str, str], float], tuple[str, str]]]] = [
+    ("Fullest disk",
+     'topk(1, 1 - node_filesystem_avail_bytes{mountpoint=~"/|/var|/mnt/6tb|/mnt/6tb-backup"}'
+     ' / node_filesystem_size_bytes{mountpoint=~"/|/var|/mnt/6tb|/mnt/6tb-backup"})',
+     lambda m, v: (f"{m.get('mountpoint', 'A disk')} is {v:.0%} full",
+                   f"On {m.get('instance', m.get('exported_instance', 'the host'))}.")),
+    ("Backups",
+     "max(vzdump_archive_age_seconds)",
+     lambda m, v: (f"Oldest guest backup is {_days(v)} old", "Across every guest vzdump backs up.")),
+    ("Certificates",
+     "topk(1, -(probe_ssl_earliest_cert_expiry - time()))",
+     lambda m, v: (f"Next cert expires in {_days(-v)}", m.get("instance", ""))),
+    ("Drives",
+     "topk(1, smartmon_device_temp_celsius)",
+     lambda m, v: (f"Warmest drive is at {v:.0f}°C", m.get("disk", m.get("device", "")))),
+    ("LLM spend",
+     "sum(increase(hermes_cost_usd_total[7d]))",
+     lambda m, v: (f"${v:.2f} on LLM calls this week", "Hermes, from the gateway's counters.")),
+]
+
+
+async def telemetry(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    if not (s.grafana.url and s.grafana_token):
+        raise Unavailable("grafana not configured")
+    link = s.grafana.link_base
+    alerts = await firing_alerts(client, s)
+    if alerts:
+        a = rng.choice(alerts)
+        labels, notes = a.get("labels") or {}, a.get("annotations") or {}
+        state = "Firing" if str(a.get("state", "")).lower() != "pending" else "Pending"
+        since = (a.get("activeAt") or "")[:16].replace("T", " ")
+        return Card(
+            kind="telemetry",
+            label=f"Lab health · {state.lower()} alert" + (f" ({len(alerts)} open)" if len(alerts) > 1 else ""),
+            title=labels.get("alertname") or "An alert",
+            subtitle=" · ".join(x for x in (labels.get("instance") or labels.get("grafana_folder"), since and f"since {since}") if x),
+            blurb=_clip(notes.get("summary") or notes.get("description"), 400),
+            url=f"{link}/alerting/list",
+            ref="alert:" + hashlib.sha1(json_key(labels).encode()).hexdigest()[:16],
+        )
+    for title, query, say in rng.sample(TRENDS, len(TRENDS)):
+        try:
+            rows = await promql(client, s, query)
+        except (httpx.HTTPError, ValueError):
+            continue
+        if not rows:
+            continue  # a metric this lab doesn't record (yet)
+        value = float(rows[0]["value"][1])
+        head, sub = say(rows[0].get("metric") or {}, value)
+        return Card(
+            kind="telemetry", label=f"Lab health · {title}", title=head, subtitle=sub,
+            blurb="No alerts are firing.", url=f"{link}/dashboards",
+            ref="trend:" + title,
+        )
+    raise Unavailable("no alerts and no trends")
+
+
+def json_key(d: dict[str, Any]) -> str:
+    return "|".join(f"{k}={d[k]}" for k in sorted(d))
+
+
+# --------------------------------------------------------------------- home
+# Home Assistant: what the house is doing. Energy comes from the Enphase Envoy's
+# lifetime counters, diffed over a day: the Envoy's own "today" sensors are
+# wrong at the source (they report the lifetime total).
+
+_home_cache = _TTLCache(300)
+_ENERGY_FACTOR = {"wh": 0.001, "kwh": 1.0, "mwh": 1000.0}
+
+
+def _ha_headers(s: Settings) -> dict[str, str]:
+    return {"Authorization": f"Bearer {s.ha_token}"}
+
+
+async def ha_states(client: httpx.AsyncClient, s: Settings) -> list[dict[str, Any]]:
+    hit = _home_cache.get("states")
+    if hit is None:
+        r = await client.get(f"{s.ha.url}/api/states", headers=_ha_headers(s))
+        r.raise_for_status()
+        hit = r.json()
+        _home_cache.put("states", hit)
+    return hit
+
+
+def _find(states: list[dict[str, Any]], *needles: str) -> dict[str, Any] | None:
+    for st in states:
+        eid = st.get("entity_id", "")
+        if eid.startswith("sensor.envoy") and all(n in eid for n in needles):
+            return st
+    return None
+
+
+def _kwh(state: Any, unit: str) -> float | None:
+    try:
+        return float(state) * _ENERGY_FACTOR.get((unit or "kWh").lower(), 1.0)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _energy_today(client: httpx.AsyncClient, s: Settings, entity: dict[str, Any],
+                        now: datetime) -> tuple[float, float | None] | None:
+    """(kWh since local midnight, kWh yesterday) from a lifetime counter."""
+    unit = (entity.get("attributes") or {}).get("unit_of_measurement", "kWh")
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start = midnight.timestamp() - 86400
+    r = await client.get(
+        f"{s.ha.url}/api/history/period/{datetime.fromtimestamp(start, now.tzinfo).isoformat()}",
+        params={"filter_entity_id": entity["entity_id"], "minimal_response": "", "no_attributes": ""},
+        headers=_ha_headers(s),
+    )
+    r.raise_for_status()
+    rows = (r.json() or [[]])[0]
+    points = []
+    for row in rows:
+        v = _kwh(row.get("state"), unit)
+        when = _when(row.get("last_changed") or "")
+        if v is not None and when is not None:
+            points.append((when, v))
+    now_v = _kwh(entity.get("state"), unit)
+    if not points or now_v is None:
+        return None
+
+    def at(ts: float) -> float | None:
+        before = [v for t, v in points if t <= ts]
+        return before[-1] if before else None
+
+    at_midnight, at_start = at(midnight.timestamp()), at(start)
+    if at_midnight is None:
+        at_midnight = points[0][1]
+    yesterday = at_midnight - at_start if at_start is not None else None
+    return max(0.0, now_v - at_midnight), yesterday
+
+
+async def home(client: httpx.AsyncClient, s: Settings, rng: random.Random, now: datetime | None = None) -> Card:
+    if not (s.ha.url and s.ha_token):
+        raise Unavailable("home assistant not configured")
+    now = now or datetime.now().astimezone()
+    states = await ha_states(client, s)
+    link = s.ha.link_base
+    app_action = {"label": "Home Assistant", "url": "homeassistant://navigate/energy", "android": "1"}
+    options: list[Callable[[], Awaitable[Card]]] = []
+
+    produced = _find(states, "lifetime", "production")
+    consumed = _find(states, "lifetime", "consumption")
+    if produced:
+        async def solar() -> Card:
+            got = await _energy_today(client, s, produced, now)
+            if not got:
+                raise Unavailable("no production history")
+            today, yesterday = got
+            bits = [f"Yesterday: {yesterday:.1f} kWh." if yesterday is not None else ""]
+            if consumed:
+                used = await _energy_today(client, s, consumed, now)
+                if used:
+                    net = today - used[0]
+                    bits.append(f"The house used {used[0]:.1f} kWh, so {'a surplus' if net >= 0 else 'a shortfall'} "
+                                f"of {abs(net):.1f} kWh so far.")
+            now_w = _find(states, "current", "production")
+            sub = ""
+            if now_w:
+                unit = (now_w.get("attributes") or {}).get("unit_of_measurement", "W")
+                sub = f"Producing {now_w.get('state')} {unit} right now"
+            return Card(kind="home", label="Home · solar", title=f"{today:.1f} kWh of sun so far today",
+                        subtitle=sub, blurb=" ".join(b for b in bits if b), url=f"{link}/energy",
+                        actions=[app_action], ref=f"solar:{now.date().isoformat()}")
+        options += [solar, solar]
+
+    weather = next((st for st in states if st.get("entity_id", "").startswith("weather.")), None)
+    if weather:
+        async def outside() -> Card:
+            a = weather.get("attributes") or {}
+            temp = a.get("temperature")
+            unit = a.get("temperature_unit", "")
+            title = f"{temp}{unit} and {str(weather.get('state', '')).replace('-', ' ')} outside" if temp is not None \
+                else f"{str(weather.get('state', '')).replace('-', ' ').capitalize()} outside"
+            sub = " · ".join(x for x in (f"humidity {a['humidity']}%" if a.get("humidity") is not None else "",
+                                          f"wind {a['wind_speed']} {a.get('wind_speed_unit', '')}".strip()
+                                          if a.get("wind_speed") is not None else "") if x)
+            return Card(kind="home", label="Home · weather", title=title, subtitle=sub,
+                        url=f"{link}/lovelace", actions=[{**app_action, "url": "homeassistant://navigate/lovelace"}],
+                        ref=f"weather:{now.date().isoformat()}")
+        options.append(outside)
+
+    if not options:
+        raise Unavailable("no home insights")
+    rng.shuffle(options)
+    last: Exception | None = None
+    for opt in options[:2]:
+        try:
+            return await opt()
+        except (Unavailable, httpx.HTTPError, KeyError, ValueError, IndexError) as e:
+            last = e
+    raise Unavailable(f"home insights failed: {last}")
+
+
 # ----------------------------------------------------------------- registry
 
 SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaitable[Card]]] = {
@@ -955,6 +1188,8 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "homelab": homelab,
     "job": job,
     "skill": skill,
+    "telemetry": telemetry,
+    "home": home,
 }
 
 
@@ -972,4 +1207,6 @@ def configured(s: Settings) -> dict[str, bool]:
         "homelab": bool(s.homelab_stack or s.homelab_feeds or (s.invidious.url and s.homelab_topics)),
         "job": bool(s.jobs.url and s.jobs_token),
         "skill": bool(s.jobs.url and s.jobs_token),
+        "telemetry": bool(s.grafana.url and s.grafana_token),
+        "home": bool(s.ha.url and s.ha_token),
     }
