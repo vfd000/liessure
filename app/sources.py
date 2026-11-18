@@ -970,7 +970,8 @@ async def skill(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> C
         raise Unavailable("no skill gaps recorded")
     g = rng.choices(gaps[:15], weights=[len(x["jobs"]) for x in gaps[:15]])[0]
     n = len(g["jobs"])
-    asked = "; ".join(f"{j['title']} at {j['company']}" for j in g["jobs"][:3])
+    roles = list(dict.fromkeys(f"{j['title']} at {j['company']}" for j in g["jobs"]))  # reposts read once
+    asked = "; ".join(roles[:3]) + (f" and {len(roles) - 3} more" if len(roles) > 3 else "")
     topic = " ".join(g["gap"].split()[:8])
     card = Card(
         kind="skill",
@@ -1185,6 +1186,14 @@ async def _energy_today(client: httpx.AsyncClient, s: Settings, entity: dict[str
 
 _stats_cache = _TTLCache(600)
 
+# Home Assistant's weather condition codes, as words.
+HA_CONDITIONS = {
+    "clear-night": "clear", "cloudy": "cloudy", "exceptional": "unusual weather", "fog": "foggy", "hail": "hail",
+    "lightning": "lightning", "lightning-rainy": "stormy", "partlycloudy": "partly cloudy", "pouring": "pouring",
+    "rainy": "rainy", "snowy": "snowy", "snowy-rainy": "sleet", "sunny": "sunny", "windy": "windy",
+    "windy-variant": "windy and cloudy",
+}
+
 
 async def ha_statistics(s: Settings, statistic_ids: list[str], start: datetime) -> dict[str, list[dict[str, Any]]]:
     """Daily kWh change per statistic from HA's long-term statistics (kept for years, unlike
@@ -1335,8 +1344,8 @@ async def home(client: httpx.AsyncClient, s: Settings, rng: random.Random, now: 
             a = weather.get("attributes") or {}
             temp = a.get("temperature")
             unit = a.get("temperature_unit", "")
-            title = f"{temp}{unit} and {str(weather.get('state', '')).replace('-', ' ')} outside" if temp is not None \
-                else f"{str(weather.get('state', '')).replace('-', ' ').capitalize()} outside"
+            sky = HA_CONDITIONS.get(str(weather.get("state", "")), str(weather.get("state", "")).replace("-", " "))
+            title = f"{temp}{unit} and {sky} outside" if temp is not None else f"{sky.capitalize()} outside"
             sub = " · ".join(x for x in (f"humidity {a['humidity']}%" if a.get("humidity") is not None else "",
                                           f"wind {a['wind_speed']} {a.get('wind_speed_unit', '')}".strip()
                                           if a.get("wind_speed") is not None else "") if x)
