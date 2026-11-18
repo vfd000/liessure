@@ -443,6 +443,8 @@ class Store:
         now = time.time()
         with self._lock, self._db:
             self._db.execute("DELETE FROM curated WHERE added_at < ?", (now - MAX_AGE_DAYS * 86400,))
+            # Phrase cards from the retired "cheers!" topic (toasts are about drinking).
+            self._db.execute("DELETE FROM curated WHERE kind = 'language' AND ref LIKE 'phrase:%:cheers!'")
             for kind, days in MAX_AGE_DAYS_BY_KIND.items():
                 self._db.execute("DELETE FROM curated WHERE kind = ? AND added_at < ?", (kind, now - days * 86400))
             # Remember rejections longer, so the same dud isn't re-scored every run.

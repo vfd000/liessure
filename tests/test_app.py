@@ -1631,3 +1631,12 @@ def test_cards_shown_can_be_found_again():
     assert [x["title"] for x in st.search_history("story")] == ["Story 8", "Story 7", "Story 6", "Story 5", "Story 4"]
     assert st.search_history("100%") == []  # LIKE wildcards are literal
 
+
+def test_toasts_count_as_alcohol():
+    from app import avoid as av
+    sante = {"title": "Santé !", "label": "French · cheers!",
+             "blurb": "Cheers! A toast said before drinking with others. Literally means 'health.'"}
+    assert av.matches(["alcohol"], sante)
+    assert not av.matches(["alcohol"], {"title": "French toast", "blurb": "Bread soaked in eggs, then fried."})
+    assert "cheers!" not in curator.PHRASE_TOPICS
+
