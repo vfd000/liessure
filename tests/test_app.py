@@ -1915,3 +1915,20 @@ def test_session_cards_from_the_hub_board():
     with make_client(full_settings()) as c:
         assert not c.get("/api/sources").json()["sources"]["session"]["configured"]
 
+
+
+def test_percent_hint_swaps_when_that_is_easier():
+    from app import mathgen
+
+    class Pick:
+        def __init__(self, *xs):
+            self.xs = list(xs)
+
+        def choice(self, _):
+            return self.xs.pop(0)
+    p = mathgen.percent(Pick(120, 40))
+    assert p.answer == "48" and p.hint == "Percentages swap: 120% of 40 is the same as 40% of 120."
+    assert p.solution == "120% of 40 = 40% of 120 = 4 × 12 (10% of 120 is 12) = 48."
+    assert mathgen.percent(Pick(88, 25)).solution == "88% of 25 = 25% of 88 = a quarter of 88 = 22."
+    assert mathgen.percent(Pick(35, 480)).hint.startswith("Build it")  # nothing easier to swap to
+    assert mathgen.percent(Pick(12.5, 40)).hint.startswith("Build it")

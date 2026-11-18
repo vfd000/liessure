@@ -59,11 +59,24 @@ def square(rng: random.Random) -> Problem:
                    wiki="Square (algebra)")
 
 
+# Percents that are easy to take of anything: when the number is one of these, swap them round.
+EASY_PERCENT = {20: "a fifth", 25: "a quarter", 40: None, 50: "half", 80: None}
+
+
 def percent(rng: random.Random) -> Problem:
-    p = rng.choice([5, 12.5, 15, 17.5, 22.5, 35, 45, 65, 85, 120, 135])
-    n = rng.choice([40, 64, 80, 120, 160, 240, 360, 480, 640, 840, 1200])
+    p = rng.choice([5, 12.5, 15, 17.5, 22.5, 35, 36, 44, 45, 48, 65, 85, 88, 120, 135])
+    n = rng.choice([20, 25, 40, 50, 64, 80, 120, 160, 240, 360, 480, 640, 840, 1200])
     ans = Fraction(str(p)) * n / 100
-    return Problem("percentages", f"What is {p:g}% of {n}?", _frac(ans),
+    q = f"What is {p:g}% of {n}?"
+    if n in EASY_PERCENT and float(p).is_integer() and (p % 10 or p > 100):
+        # a% of b = b% of a: 120% of 40 is 40% of 120.
+        name = EASY_PERCENT[n]
+        how = f"{name} of {p:g}" if name else f"{n // 10} × {p / 10:g} (10% of {p:g} is {p / 10:g})"
+        return Problem("percentages", q, _frac(ans),
+                       f"Percentages swap: {p:g}% of {n} is the same as {n}% of {p:g}.",
+                       f"{p:g}% of {n} = {n}% of {p:g} = {how} = {float(ans):g}.",
+                       wiki="Percentage")
+    return Problem("percentages", q, _frac(ans),
                    "Build it from 10%, 5% and 1% pieces.",
                    f"{p:g}% of {n} = {p:g}/100 × {n} = {float(ans):g}.",
                    wiki="Percentage")
