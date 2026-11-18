@@ -1,6 +1,7 @@
 package tv.liess.liessure
 
 import android.app.Activity
+import android.app.SearchManager
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
@@ -8,6 +9,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.security.KeyChain
 import android.view.WindowInsets
 import android.webkit.ClientCertRequest
@@ -45,6 +47,9 @@ class MainActivity : Activity() {
     }
 
     private val prefs by lazy { getSharedPreferences("liessure", Context.MODE_PRIVATE) }
+
+    /** Hosts the feed asked to show in place (openInApp), e.g. Jellyfin; cleared on the next feed load. */
+    private val visiting = mutableSetOf<String>()
 
     /** Set while a load is being retried from cache after a network error. */
     private var fromCache = false
@@ -95,6 +100,7 @@ class MainActivity : Activity() {
 
     private fun loadFor(intent: Intent?) {
         fromCache = false
+        visiting.clear()
         web.settings.cacheMode = WebSettings.LOAD_DEFAULT
         val fromReddit = intent?.data?.host?.contains("redd") == true
         val url = if (fromReddit) home.buildUpon().appendQueryParameter("from", "reddit").build() else home
@@ -137,6 +143,38 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * Symfonium has an API for this (docs.symfonium.app, "Symfonium API"): a broadcast that plays a
+     * song found by title, artist and album. Other players get Android's play-from-search intent.
+     */
+    private fun playSong(pkg: String, title: String, artist: String, album: String) {
+        if (pkg == SYMFONIUM) {
+            sendBroadcast(
+                Intent("app.symfonium.api.MEDIA_START")
+                    .setComponent(ComponentName(SYMFONIUM, "app.symfonium.remote.api.ApiReceiver"))
+                    .putExtra("MEDIA_TYPE", "song")
+                    .putExtra("NAME", title)
+                    .putExtra("ARTIST", artist)
+                    .putExtra("ALBUM", album),
+            )
+            launchApp(pkg)
+            return
+        }
+        val search = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
+            .setPackage(pkg)
+            .putExtra(SearchManager.QUERY, "$title $artist".trim())
+            .putExtra(MediaStore.EXTRA_MEDIA_FOCUS, MediaStore.Audio.Media.ENTRY_CONTENT_TYPE)
+            .putExtra(MediaStore.EXTRA_MEDIA_TITLE, title)
+            .putExtra(MediaStore.EXTRA_MEDIA_ARTIST, artist)
+            .putExtra(MediaStore.EXTRA_MEDIA_ALBUM, album)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(search)
+        } catch (e: ActivityNotFoundException) {
+            launchApp(pkg)
+        }
+    }
+
     /** Exposed to the page as window.LiessureAndroid. Only honoured for our own origin. */
     inner class Bridge {
         @JavascriptInterface
@@ -149,13 +187,29 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun retry() = runOnUiThread { loadFor(intent) }
+
+        /** Show a page (Jellyfin's item page) inside the app; Back returns to the feed. */
+        @JavascriptInterface
+        fun openInApp(url: String) = runOnUiThread {
+            val uri = Uri.parse(url)
+            if (isHome(web.url) && uri.scheme == "https" && !uri.host.isNullOrEmpty()) {
+                visiting.add(uri.host!!)
+                web.loadUrl(url)
+            }
+        }
+
+        /** Start one song in the music app, then bring the app up. */
+        @JavascriptInterface
+        fun playSong(pkg: String, title: String, artist: String, album: String) = runOnUiThread {
+            if (isHome(web.url) && pkg.matches(Regex("[A-Za-z0-9_.]+"))) this@MainActivity.playSong(pkg, title, artist, album)
+        }
     }
 
     inner class Client : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val uri = request.url
             if (!request.isForMainFrame) return false // inline players (iframes) stay put
-            if ((uri.scheme == "https" || uri.scheme == "http") && uri.host in inAppHosts) return false
+            if ((uri.scheme == "https" || uri.scheme == "http") && (uri.host in inAppHosts || uri.host in visiting)) return false
             openExternal(uri.toString())
             return true
         }
@@ -225,6 +279,7 @@ class MainActivity : Activity() {
     }.getOrDefault(false)
 
     private companion object {
+        const val SYMFONIUM = "app.symfonik.music.player"
         val OFFLINE_ERRORS = setOf(
             WebViewClient.ERROR_HOST_LOOKUP, WebViewClient.ERROR_CONNECT, WebViewClient.ERROR_TIMEOUT,
         )
