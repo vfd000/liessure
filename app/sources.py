@@ -261,7 +261,67 @@ async def movie(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> C
     return await _jellyfin_video(client, s, "Movie", "movie", "Movie on Jellyfin")
 
 
+async def _jf_get(client: httpx.AsyncClient, s: Settings, path: str, **params: Any) -> Any:
+    if s.jellyfin_user_id:
+        params.setdefault("userId", s.jellyfin_user_id)
+    r = await client.get(f"{s.jellyfin.url}{path}", params=params, headers=_jellyfin_headers(s))
+    r.raise_for_status()
+    return r.json()
+
+
+def episode_card(s: Settings, ep: dict[str, Any], label: str, series: dict[str, Any] | None = None) -> Card:
+    """One episode: its own name, picture and summary, and where it sits in the series."""
+    code = ""
+    if ep.get("ParentIndexNumber") is not None and ep.get("IndexNumber") is not None:
+        code = f"S{ep['ParentIndexNumber']}E{ep['IndexNumber']}"
+    sub = " · ".join(x for x in (ep.get("SeriesName") or (series or {}).get("Name"), code,
+                                 str(ep.get("ProductionYear") or "")) if x)
+    if (ep.get("ImageTags") or {}).get("Primary"):
+        image = _jellyfin_image(s, ep["Id"])
+    elif ep.get("SeriesId"):
+        image = _jellyfin_image(s, ep["SeriesId"])
+    else:
+        image = ""
+    return Card(
+        kind="show",
+        label=label,
+        title=ep.get("Name") or code or "An episode",
+        subtitle=sub,
+        blurb=_clip(ep.get("Overview") or (series or {}).get("Overview")),
+        image=image,
+        url=_jellyfin_link(s, ep),
+        embed=_trailer_embed(s, series) if series else {},
+        ref=ep["Id"],
+        open_in_app=True,
+    )
+
+
 async def show(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    """A specific episode: the next one of something you're partway through, or where to start
+    (or carry on) a random series. Falls back to the series itself."""
+    if not (s.jellyfin.url and s.jellyfin_token):
+        raise Unavailable("jellyfin not configured")
+    fields = "Overview,ProductionYear"
+    if s.jellyfin_user_id and rng.random() < 0.4:
+        try:
+            up = (await _jf_get(client, s, "/Shows/NextUp", Limit="20", Fields=fields)).get("Items") or []
+            if up:
+                return episode_card(s, rng.choice(up), "Next up on Jellyfin")
+        except (httpx.HTTPError, ValueError, KeyError):
+            pass
+    series = await _jellyfin_random(client, s, "Series", unplayed=True)
+    try:
+        eps: list[dict[str, Any]] = []
+        if s.jellyfin_user_id:
+            eps = (await _jf_get(client, s, "/Shows/NextUp", seriesId=series["Id"], Limit="1",
+                                 Fields=fields)).get("Items") or []
+        if not eps:
+            eps = (await _jf_get(client, s, f"/Shows/{series['Id']}/Episodes", Limit="1",
+                                 Fields=fields)).get("Items") or []
+        if eps:
+            return episode_card(s, eps[0], "Episode on Jellyfin", series)
+    except (httpx.HTTPError, ValueError, KeyError):
+        pass
     return await _jellyfin_video(client, s, "Series", "show", "Series on Jellyfin")
 
 
