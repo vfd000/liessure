@@ -1,29 +1,38 @@
 #!/usr/bin/env bash
 # CHANGES
-#   ct 163: read-only preflight: hostname is liessure; /opt/liessure/.env has no JOBS_*, GRAFANA_* or HA_* lines yet
-#   ct 149: read-only: reads MCP_API_TOKEN from the running jobs app container's environment (never printed)
-#   ct 110: reads GRAFANA_ADMIN_PASSWORD from /opt/telemetry/.env (never printed); checks Grafana has no service
-#           account named liessure; creates one (Viewer role) and a token for it via Grafana's API on localhost:3000,
-#           kept in /root/minted-liessure/grafana.key (0600) only until it is copied. A Viewer can query every
-#           datasource through Grafana, Loki included (same reach as the existing mcp-grafana account)
-#   ct 126: read-only: reads HOME_ASSISTANT_MCP_TOKEN from /root/mcp-server/.env (never printed). Liessure then shares
+#   Step 1, read-only preflight (aborts before any change if a check fails):
+#     ct 163: hostname is liessure; /opt/liessure/.env has none of JOBS_URL, JOBS_TOKEN, GRAFANA_URL, GRAFANA_TOKEN,
+#             HA_URL, HA_TOKEN yet
+#     ct 110: /opt/telemetry/.env exists and has a GRAFANA_ADMIN_PASSWORD line; python3 is installed; lists Grafana
+#             service accounts named liessure via localhost:3000 with that admin password (must be none)
+#     ct 126: /root/mcp-server/.env has a HOME_ASSISTANT_MCP_TOKEN line (existence only)
+#     ct 149: reads the jobs app container's MCP_API_TOKEN (docker inspect of the jobs compose project's app
+#             service) and checks only its length; the value goes no further in this step
+#   ct 110: reads GRAFANA_ADMIN_PASSWORD from /opt/telemetry/.env (never printed); creates a Grafana service account
+#           named liessure (Viewer role) and a token for it via Grafana's API on localhost:3000, kept in
+#           /root/minted-liessure/grafana.key (0600) only until it is copied. A Viewer can query every datasource
+#           through Grafana, Loki included (same reach as the existing mcp-grafana account)
+#   ct 149: reads MCP_API_TOKEN from the jobs app container again to copy it (never printed)
+#   ct 126: reads HOME_ASSISTANT_MCP_TOKEN from /root/mcp-server/.env to copy it (never printed). Liessure then shares
 #           household-mcp's Home Assistant token: revoking that token turns off Liessure's home cards too
 #   ct 163: appends to /opt/liessure/.env (0600): JOBS_URL=https://jobs.liess.tv, JOBS_TOKEN (the jobs token),
 #           GRAFANA_URL=https://telemetry.liess.tv, GRAFANA_TOKEN (the new Grafana token),
-#           HA_URL=https://homeassistant.liess.tv, HA_TOKEN (the Home Assistant token); values piped through wtr
+#           HA_URL=https://homeassistant.liess.tv, HA_TOKEN (the Home Assistant token)
 #   ct 110: shreds /root/minted-liessure/grafana.key and removes the directory
 #   ct 163: checks each token from inside (HTTP codes only): GET jobs.liess.tv/api/status, GET
 #           telemetry.liess.tv/api/prometheus/grafana/api/v1/alerts, GET homeassistant.liess.tv/api/
 #   ct 163: replaces /etc/systemd/system/liessure-autodeploy.timer (data, sha256-checked) so the deploy check runs
 #           every 30 s instead of every 2 min; daemon-reload; restarts the timer
 #   ct 163: recreates the liessure container (docker compose up -d --no-build --force-recreate, holding the autodeploy
-#           lock so the timer can't race it), waits for /healthz, prints the first 1200 bytes of /api/sources
+#           lock so the timer can't race it), waits for /healthz, prints the first 1200 bytes of /api/sources and
+#           the timer's next run
 #   On any failure after a change: deletes the liessure Grafana service account, shreds the minted file, removes the
 #   six .env lines and recreates the container again (the timer file stays: it is harmless either way)
-#   wtr: no files or settings change. Every step is an ssh to axl@10.11.2.233 (BatchMode,
-#   StrictHostKeyChecking=accept-new: a first-seen key is accepted, a changed one fails) running sudo pct exec. The
-#   three copies in step 3 run as sudo bash -c pipelines on wtr: pct exec <source ct> ... | pct exec 163 -- tee -a
-#   .env, so each token passes through a pipe in wtr's memory (never written to wtr's disk, never printed)
+#   wtr: no files or settings change. Every command in this plan, the read-only checks included, is an ssh to
+#   axl@10.11.2.233 with BatchMode and StrictHostKeyChecking=accept-new (a wtr host key seen for the first time is
+#   trusted automatically; a changed one fails), running sudo pct exec into the container named above. The three
+#   copies run as sudo bash -c pipelines on wtr: pct exec <source ct> ... | pct exec 163 -- tee -a .env, so each
+#   token passes through a pipe in wtr's memory (never written to wtr's disk, never printed)
 # END CHANGES
 #
 # Liessure's jobs, Grafana and Home Assistant tokens, without anyone typing one; and the 30 s deploy timer.
