@@ -193,7 +193,15 @@ NPM only), created by the deploy-worker plan `deploy/ct-plan.sh`.
    `.github/workflows/image.yml` on GitHub, which publishes
    `ghcr.io/vfd000/liessure` (a public package: the image holds code, never
    secrets). The run summary prints the release command.
-2. **Release:** `bash deploy/build-release-plan.sh ghcr.io/vfd000/liessure@sha256:<digest> <commit>`
+2. **Deploy on merge:** CT 163 runs `liessure-autodeploy.timer`
+   (`deploy/autodeploy/`, installed by `deploy/build-autodeploy-plan.sh`).
+   Every two minutes it pulls `:latest` (built only from `main`); when the
+   digest is new it pins it in `.env`, recreates the container and waits for
+   `/healthz`. An unhealthy build is rolled back and not retried; the next
+   build goes out as usual. Log: `journalctl -u liessure-autodeploy` and
+   `/var/lib/liessure-autodeploy/deployed` in the CT.
+3. **Compose changes** (or a specific older build):
+   `bash deploy/build-release-plan.sh ghcr.io/vfd000/liessure@sha256:<digest> <commit>`
    builds a deploy-worker plan that installs that commit's
    `docker-compose.yml`, pins `LIESSURE_IMAGE` to the digest in
    `/opt/liessure/.env`, pulls and recreates the container, and rolls back
