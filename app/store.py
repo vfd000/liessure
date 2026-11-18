@@ -73,6 +73,11 @@ CREATE TABLE IF NOT EXISTS sessions (          -- signed-in browsers: sha256 of 
 CREATE TABLE IF NOT EXISTS math_help (       -- help used on a math problem: hint, fix (LLM), tutor (Claude)
     ts REAL NOT NULL, user TEXT NOT NULL, ref TEXT NOT NULL, topic TEXT NOT NULL, kind TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS history (         -- every card the feed showed someone, to find it again
+    user TEXT NOT NULL, key TEXT NOT NULL, ts REAL NOT NULL, card TEXT NOT NULL, text TEXT NOT NULL,
+    PRIMARY KEY (user, key)
+);
+CREATE INDEX IF NOT EXISTS history_user_ts ON history (user, ts);
 CREATE TABLE IF NOT EXISTS avoid (          -- topics a reader never wants (avoid.py)
     user TEXT NOT NULL, term TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (user, term)
 );
@@ -282,6 +287,36 @@ class Store:
             self._db.execute(
                 "INSERT OR REPLACE INTO todo_estimates (item_id, text_hash, minutes, label, assumption, ts) "
                 "VALUES (?, ?, ?, ?, ?, ?)", (item_id, text_hash, minutes, label, assumption, time.time()))
+
+    # --- history: cards shown, searchable
+    HISTORY_MAX = 1000
+
+    def remember_shown(self, cards: list[dict[str, Any]], user: str = "owner") -> None:
+        now = time.time()
+        rows = []
+        for i, c in enumerate(cards):
+            key = f"{c.get('kind')}:{c.get('ref') or c.get('url')}"[:300]
+            text = " ".join(str(c.get(k) or "") for k in ("title", "subtitle", "label", "blurb")).casefold()
+            rows.append((user, key, now + i / 1000, json.dumps(c), text[:3000]))
+        with self._lock, self._db:
+            self._db.executemany(
+                "INSERT INTO history (user, key, ts, card, text) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT (user, key) DO UPDATE SET ts = excluded.ts, card = excluded.card, text = excluded.text",
+                rows)
+            self._db.execute(
+                "DELETE FROM history WHERE user = ? AND ts < (SELECT ts FROM history WHERE user = ? "
+                "ORDER BY ts DESC LIMIT 1 OFFSET ?)", (user, user, self.HISTORY_MAX - 1))
+
+    def search_history(self, q: str, user: str = "owner", limit: int = 40) -> list[dict[str, Any]]:
+        """Cards shown to this person, newest first, whose text has every word of q."""
+        words = [w for w in q.casefold().split() if w][:8]
+        where = " AND ".join("text LIKE ? ESCAPE '\\'" for _ in words) or "1"
+        args = [f"%{w.replace('%', '\\%').replace('_', '\\_')}%" for w in words]
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT card FROM history WHERE user = ? AND {where} ORDER BY ts DESC LIMIT ?",
+                (user, *args, limit)).fetchall()
+        return [json.loads(r["card"]) for r in rows]
 
     # --- disinterests
     def avoid_list(self, user: str = "owner") -> list[str]:

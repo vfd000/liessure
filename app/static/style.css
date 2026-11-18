@@ -98,6 +98,9 @@ body {
 .body { position: relative; }
 .nope { position: absolute; top: 8px; right: 8px; border: 0; background: transparent; color: var(--muted);
   font-size: 15px; padding: 6px 8px; cursor: pointer; }
+.searchbar { display: flex; gap: 8px; padding: 8px 12px; }
+.searchbar input { flex: 1; min-width: 0; font: inherit; padding: 8px 12px; border-radius: 18px;
+  border: 1px solid currentColor; background: transparent; color: inherit; }
 .signout { text-decoration: none; color: inherit; }
 .ideas { width: min(560px, calc(100vw - 32px)); border: 0; border-radius: 12px; padding: 16px;
   background: var(--card, #1c1f24); color: inherit; }

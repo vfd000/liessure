@@ -17,6 +17,8 @@ const UI = {
     "Wikipedia": "Wikipedia", "News": "Noticias", "Videos": "Vídeos", "Movies": "Películas", "Series": "Series",
     "Music": "Música", "Photos": "Fotos", "Math": "Mates", "Recall": "Repaso", "Bite-size": "Bocados",
     "Lessons": "Lecciones", "Home": "Casa", "Languages": "Idiomas", "Careers": "Carreras",
+    "Search cards you've seen": "Buscar tarjetas que ya viste", "Found": "Encontradas",
+    "Nothing found.": "No hay resultados.",
     "Not interested": "No me interesa", "Right!": "¡Correcto!", "Not quite.": "Casi, pero no.",
     "Right. You remembered it.": "Correcto. Lo recordaste.", "Not quite. It'll come back sooner.": "Casi. Volverá pronto.",
     "K-drama": "K-drama", "Hide everything about:": "Ocultar todo sobre:", "Hide": "Ocultar",
@@ -529,7 +531,7 @@ function stopInline(card) {
 }
 
 async function load(n = 6) {
-  if (loading) return;
+  if (loading || searching) return;
   loading = true;
   const gen = generation;
   try {
@@ -558,8 +560,10 @@ async function load(n = 6) {
   if (gen === generation && !offline && sentinel.getBoundingClientRect().top < innerHeight + 400) load();
 }
 
+let rendered = []; // the cards on screen, so Back can bring the same feed back
 function show(c) {
   shown.add(cardKey(c));
+  rendered.push(c);
   feed.append(renderCard(c));
 }
 
@@ -578,7 +582,9 @@ function reset() {
   generation++;
   loading = false;
   offline = false;
+  searching = false;
   shown = new Set();
+  rendered = [];
   feed.replaceChildren();
   scrollTo({ top: 0 });
   load();
@@ -696,6 +702,58 @@ whoami.then(() => fetch("/api/sources")).then((r) => r.json()).then(({ language,
   if (language) LABELS.language = language;
   renderChips();
 }).catch(() => {});
-whoami.then(() => load());
+// Back from an article: the same feed, where you were (not a fresh one). Saved whenever the page is left.
+const FEED_STATE = "liessure.feedState";
+addEventListener("pagehide", () => {
+  if (searching || !rendered.length) return;
+  try {
+    sessionStorage.setItem(FEED_STATE, JSON.stringify({ cards: rendered.slice(-80), y: scrollY, at: Date.now(),
+      filter: [...filter] }));
+  } catch {}
+});
+function restoreFeed() {
+  let st = null;
+  try { st = JSON.parse(sessionStorage.getItem(FEED_STATE)); sessionStorage.removeItem(FEED_STATE); } catch {}
+  if (!st || !st.cards || !st.cards.length || Date.now() - st.at > 30 * 60 * 1000) return false;
+  filter = new Set(st.filter || []);
+  for (const c of st.cards) show(c);
+  requestAnimationFrame(() => scrollTo({ top: st.y || 0 }));
+  return true;
+}
+whoami.then(() => { if (!restoreFeed()) load(); });
+
+// Search the cards you've seen (server history; the cards saved on this phone when offline).
+let searching = false;
+let searchTimer = null;
+const searchbar = document.getElementById("searchbar");
+const q = document.getElementById("q");
+q.placeholder = t("Search cards you've seen");
+async function runSearch() {
+  const term = q.value.trim();
+  if (term.length < 2) return;
+  searching = true;
+  generation++;
+  let cards = [];
+  try {
+    const r = await fetch("/api/history?" + new URLSearchParams({ q: term }));
+    if (!r.ok) throw new Error(r.status);
+    cards = (await r.json()).cards;
+  } catch {
+    const words = term.toLowerCase().split(/\s+/);
+    cards = savedCards().filter((c) => {
+      const text = [c.title, c.subtitle, c.label, c.blurb].join(" ").toLowerCase();
+      return words.every((w) => text.includes(w));
+    });
+  }
+  feed.replaceChildren(el("div", "offline", cards.length ? `${t("Found")}: ${cards.length}` : t("Nothing found.")));
+  for (const c of cards) feed.append(renderCard(c));
+  scrollTo({ top: 0 });
+}
+document.getElementById("search").onclick = () => {
+  searchbar.hidden = !searchbar.hidden;
+  if (!searchbar.hidden) q.focus(); else if (searching) reset();
+};
+document.getElementById("search-close").onclick = () => { searchbar.hidden = true; q.value = ""; if (searching) reset(); };
+q.oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 300); };
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

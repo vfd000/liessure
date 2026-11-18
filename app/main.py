@@ -545,6 +545,7 @@ def create_app(
             fallback = await one(client, "wikipedia", rng, user)
             if fallback:
                 out.append(fallback)
+        store.remember_shown(out, user)  # so it can be found again (/api/history)
         return {"cards": out}
 
     @app.get("/api/card/{kind}")
@@ -555,6 +556,11 @@ def create_app(
         if not c:
             raise HTTPException(503, f"{kind} has nothing right now")
         return c
+
+    @app.get("/api/history")
+    async def history(request: Request, q: str = Query("", max_length=200), limit: int = Query(40, ge=1, le=100)):
+        """Cards the feed showed you, newest first; q narrows to those with every word in it."""
+        return {"cards": store.search_history(q, request.state.user, limit)}
 
     @app.get("/img")
     async def img(request: Request, src: str):
