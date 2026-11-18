@@ -195,7 +195,7 @@ NPM only), created by the deploy-worker plan `deploy/ct-plan.sh`.
    secrets). The run summary prints the release command.
 2. **Deploy on merge:** CT 163 runs `liessure-autodeploy.timer`
    (`deploy/autodeploy/`, installed by `deploy/build-autodeploy-plan.sh`).
-   Every two minutes it pulls `:latest` (built only from `main`); when the
+   Every 30 seconds it pulls `:latest` (built only from `main`); when the
    digest is new it pins it in `.env`, recreates the container and waits for
    `/healthz`. An unhealthy build is rolled back and not retried; the next
    build goes out as usual. Log: `journalctl -u liessure-autodeploy` and

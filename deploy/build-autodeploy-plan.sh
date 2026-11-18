@@ -24,8 +24,8 @@ sum() { sha256sum "$1" | cut -d' ' -f1; }
 CHANGES="ct 163: read-only preflight: hostname is liessure, systemd and docker are present, /opt/liessure/.env exists
 ct 163: installs /usr/local/sbin/liessure-autodeploy (0755) and /etc/systemd/system/liessure-autodeploy.service
         and .timer (0644), all data from deploy/autodeploy/ in vfd000/liessure, sha256-checked; replaces earlier copies
-ct 163: systemctl daemon-reload; enable --now liessure-autodeploy.timer. From two minutes after this plan, and every
-        two minutes after that, the timer runs liessure-autodeploy, which: docker pull ghcr.io/vfd000/liessure:latest
+ct 163: systemctl daemon-reload; enable --now liessure-autodeploy.timer. From 30 s after this plan, and every 30 s after
+        that, the timer runs liessure-autodeploy, which: docker pull ghcr.io/vfd000/liessure:latest
         (public, no credentials; built only from main); if its digest differs from LIESSURE_IMAGE in
         /opt/liessure/.env, rewrites that line to the new digest and runs docker compose up -d (recreates the
         liessure container), then waits up to 60 s for /healthz on that image; if unhealthy, puts the previous
@@ -79,7 +79,7 @@ done
 cat <<'EOF'
 ct "chmod 0755 /usr/local/sbin/liessure-autodeploy && chmod 0644 /etc/systemd/system/liessure-autodeploy.service /etc/systemd/system/liessure-autodeploy.timer"
 
-say "4. ct 163: enable the timer (its first run is two minutes from now)"
+say "4. ct 163: enable the timer (its first run is 30 s from now)"
 ct "systemctl daemon-reload && systemctl enable --now liessure-autodeploy.timer"
 ct "systemctl list-timers --all liessure-autodeploy.timer | head -3"
 say "DONE: CT 163 deploys each new build of main; journalctl -u liessure-autodeploy shows each run"
