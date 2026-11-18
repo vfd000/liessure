@@ -87,7 +87,7 @@ function renderCard(c) {
     play.onclick = () => { playInline(card, c.embed); play.remove(); report(c, "play"); };
     actions.append(play);
   }
-  const go = el("a", c.embed && c.embed.src ? "" : "primary", "Open");
+  const go = el("a", (c.embed && c.embed.src) || c.quiz ? "" : "primary", c.open_label || "Open");
   go.href = c.url;
   go.target = "_blank";
   go.rel = "noopener";
@@ -228,6 +228,25 @@ function renderQuiz(c) {
       row.append(pad);
     }
     let tries = 0;
+    let lastWrong = "";
+    // A wrong answer: the likely mistake and the steps through it, from the household LLM.
+    const fix = el("button", "fix", "Help me fix it");
+    const help = el("p", "why help");
+    fix.onclick = async () => {
+      fix.disabled = true;
+      help.textContent = "Working out where it went wrong…";
+      box.insertBefore(help, result.nextSibling);
+      try {
+        const r = await fetch("/api/math/help", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ question: c.title, answer: String(q.answer), theirs: lastWrong,
+            solution: q.solution || "" }) });
+        if (!r.ok) throw new Error(r.status);
+        help.textContent = (await r.json()).help;
+      } catch {
+        help.textContent = "Couldn't get help right now. Try Tutor me, or the hint.";
+      }
+      fix.disabled = false;
+    };
     // Each answered (or revealed) math card is kept server-side; the reply is the running tally.
     const progress = (correct, revealed) => {
       if (!q.topic) return;
@@ -251,7 +270,11 @@ function renderQuiz(c) {
         check.disabled = input.disabled = true;
         report(c, "play");
         progress(true, false);
-      } else result.textContent = "Not that. Try again, or take the hint.";
+      } else {
+        result.textContent = "Not that. Try again, or get help fixing it.";
+        lastWrong = input.value.trim();
+        if (!row.querySelector(".fix")) row.append(fix);
+      }
     };
     input.onkeydown = (e) => { if (e.key === "Enter") check.onclick(); };
     hint.onclick = () => { result.textContent = q.hint; };

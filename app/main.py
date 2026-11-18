@@ -63,6 +63,13 @@ class RecallAnswer(BaseModel):
     correct: bool
 
 
+class MathHelp(BaseModel):
+    question: str = Field(max_length=400)
+    answer: str = Field(max_length=40)
+    theirs: str = Field(max_length=40)
+    solution: str = Field("", max_length=600)
+
+
 class MathAnswer(BaseModel):
     ref: str = Field(max_length=64)
     topic: str = Field("", max_length=40)
@@ -189,6 +196,18 @@ def create_app(
         """A math card answered (or given up on): kept for progress, returns it."""
         store.record_math(a.ref, a.topic, a.correct, a.tries, a.revealed)
         return store.math_stats()
+
+    @app.post("/api/math/help")
+    async def math_help(request: Request, h: MathHelp):
+        """Step-by-step help with a wrong answer: the likely mistake, then the way through."""
+        if not settings.curator_enabled:
+            raise HTTPException(409, "needs LLM_URL and LLM_KEY")
+        try:
+            text = await curator.math_help(request.app.state.client, settings, h.question, h.answer, h.theirs,
+                                           h.solution)
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"the LLM didn't answer: {type(e).__name__}")
+        return {"help": text[:2000]}
 
     @app.get("/api/math/stats")
     async def math_stats():

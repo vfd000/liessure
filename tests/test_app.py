@@ -981,3 +981,21 @@ def test_math_progress_is_kept():
         assert r.json()["streak_days"] == 1
         assert c.get("/api/math/stats").json()["all"]["tried"] == 1
 
+
+def test_math_help_for_a_wrong_answer(monkeypatch):
+    seen = {}
+
+    async def ask(client, s, prompt, system=None):
+        seen["prompt"], seen["system"] = prompt, system
+        return "1. You added instead of subtracting.\n2. ..."
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    with make_client(full_settings(llm_url="http://llm.test", llm_key="k")) as c:
+        card = c.get("/api/card/math").json()
+        assert card["open_label"] == "More info"
+        r = c.post("/api/math/help", json={"question": "Solve for x: 4x + 5 = -3", "answer": "-2", "theirs": "0.5",
+                                            "solution": "4x = -8, so x = -2."})
+    assert r.status_code == 200 and r.json()["help"].startswith("1. You added")
+    assert "The learner answered: 0.5" in seen["prompt"] and "numbered steps" in seen["system"]
+    with make_client(full_settings()) as c:
+        assert c.post("/api/math/help", json={"question": "q", "answer": "1", "theirs": "2"}).status_code == 409
+

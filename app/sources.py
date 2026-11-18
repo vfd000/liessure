@@ -55,6 +55,8 @@ class Card:
     why: str = ""
     # The Android app opens `url` inside itself (Jellyfin's web UI: its phone app takes no deep links).
     open_in_app: bool = False
+    # What the link button says, when "Open" would mislead (a math card's topic page is background reading).
+    open_label: str = ""
     # Something to answer in place. Typed: {"answer", "tolerance", "hint", "solution"};
     # multiple choice: {"id", "choices", "answer" (index), "solution"}.
     quiz: dict[str, Any] = field(default_factory=dict)
@@ -1437,6 +1439,7 @@ async def math(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
         quiz={"answer": p.answer, "tolerance": p.tolerance, "hint": p.hint, "solution": p.solution,
               "scratch": True, "topic": p.topic},
         actions=[{"label": "Tutor me", "url": tutor_url(p)}],
+        open_label="More info",
         ref="math:" + hashlib.sha1(p.question.encode()).hexdigest()[:16],
     )
 
