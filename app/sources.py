@@ -1513,7 +1513,8 @@ async def solar_card(client: httpx.AsyncClient, s: Settings, states: list[dict[s
     key = (tuple(ids), today.isoformat(), now.hour)
     stats = _stats_cache.get(key)
     if stats is None:
-        stats = await ha_statistics(s, ids, start)
+        # Bounded, so a slow websocket still leaves time for the history fallback inside the card budget.
+        stats = await asyncio.wait_for(ha_statistics(s, ids, start), 4)
         _stats_cache.put(key, stats)
     made = energy_periods(stats.get(produced["entity_id"]) or [], today, now.tzinfo)
     rate = s.home_energy_rate
