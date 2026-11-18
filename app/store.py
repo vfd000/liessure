@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS sessions (          -- signed-in browsers: sha256 of 
     token_hash TEXT PRIMARY KEY, sub TEXT NOT NULL, user TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
     exp REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS avoid (          -- topics a reader never wants (avoid.py)
+    user TEXT NOT NULL, term TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (user, term)
+);
 CREATE TABLE IF NOT EXISTS rejected (
     kind TEXT NOT NULL, ref TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (kind, ref)
 );
@@ -255,6 +258,21 @@ class Store:
             self._db.execute(
                 "INSERT OR REPLACE INTO todo_estimates (item_id, text_hash, minutes, label, assumption, ts) "
                 "VALUES (?, ?, ?, ?, ?, ?)", (item_id, text_hash, minutes, label, assumption, time.time()))
+
+    # --- disinterests
+    def avoid_list(self, user: str = "owner") -> list[str]:
+        with self._lock:
+            rows = self._db.execute("SELECT term FROM avoid WHERE user = ? ORDER BY ts", (user,)).fetchall()
+        return [r["term"] for r in rows]
+
+    def add_avoid(self, term: str, user: str = "owner") -> None:
+        with self._lock, self._db:
+            self._db.execute("INSERT OR IGNORE INTO avoid (user, term, ts) VALUES (?, ?, ?)",
+                             (user, term.strip().casefold()[:60], time.time()))
+
+    def remove_avoid(self, term: str, user: str = "owner") -> None:
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM avoid WHERE user = ? AND term = ?", (user, term.strip().casefold()))
 
     # --- ideas: improvements jotted down in the app, to build later
     def add_idea(self, text: str, about: str = "", user: str = "owner") -> int:

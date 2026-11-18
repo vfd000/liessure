@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 import dataclasses
 
-from . import auth, curator, lessons, profile, reader, sources
+from . import auth, avoid, curator, lessons, profile, reader, sources
 from .config import KINDS, MAX_PER_LOAD, OWNER_ONLY_KINDS, RECALL_KINDS, Settings
 from .store import Store
 
@@ -50,6 +50,10 @@ def pick_kinds(weights: dict[str, int], available: dict[str, bool], n: int, rng:
         choices = [k for k in capped if not picked or k != picked[-1]] or capped
         picked.append(rng.choices(choices, weights=[weights[k] for k in choices])[0])
     return picked
+
+
+class AvoidTerm(BaseModel):
+    term: str = Field(min_length=1, max_length=60)
 
 
 class Idea(BaseModel):
@@ -194,6 +198,21 @@ def create_app(
         resp.delete_cookie(auth.COOKIE)
         return resp
 
+    @app.get("/api/me/avoid")
+    async def avoid_list(request: Request):
+        return {"avoid": store.avoid_list(request.state.user), "suggested": avoid.SUGGESTED}
+
+    @app.post("/api/me/avoid")
+    async def avoid_add(request: Request, t: AvoidTerm):
+        """Never show this topic again: a category (sports, alcohol, animal products) or any word."""
+        store.add_avoid(t.term, request.state.user)
+        return {"avoid": store.avoid_list(request.state.user)}
+
+    @app.delete("/api/me/avoid/{term}")
+    async def avoid_remove(request: Request, term: str):
+        store.remove_avoid(term, request.state.user)
+        return {"avoid": store.avoid_list(request.state.user)}
+
     @app.get("/api/me")
     async def me(request: Request):
         user = request.state.user
@@ -255,6 +274,15 @@ def create_app(
         return kinds
 
     async def one(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
+        """A card, skipping (up to three tries) anything on the reader's not-interested list."""
+        terms = store.avoid_list(user)
+        for _ in range(3):
+            card = await _one(client, kind, rng, user)
+            if card is None or not avoid.matches(terms, card):
+                return card
+        return None
+
+    async def _one(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
         if kind not in kinds_for(user):
             return None
         if kind == "recall":
