@@ -388,21 +388,21 @@ def create_app(
         """Jellyfin audio, proxied so the page needs no Jellyfin token. Passes Range through for seeking."""
         if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", item_id) or not (settings.jellyfin.url and settings.jellyfin_token):
             raise HTTPException(404)
-        params = {
-            "Container": "mp3,aac,m4a|aac,flac,ogg,opus,webm|opus",
-            "TranscodingContainer": "mp3", "TranscodingProtocol": "http", "AudioCodec": "mp3",
-            "MaxStreamingBitrate": "320000",
-        }
-        if settings.jellyfin_user_id:
-            params["UserId"] = settings.jellyfin_user_id
         headers = sources.auth_headers_for(settings, settings.jellyfin.url + "/") or {}
+        client: httpx.AsyncClient = request.app.state.client
+        # The original file when the browser can play it: it has a length, so the player knows the
+        # duration and can seek. A live transcode has neither (the bar grew as it played).
+        if await sources.browser_plays(client, settings, item_id):
+            url, params = f"{settings.jellyfin.url}/Audio/{item_id}/stream", {"static": "true"}
+        else:
+            url, params = f"{settings.jellyfin.url}/Audio/{item_id}/universal", {
+                "Container": "mp3", "TranscodingContainer": "mp3", "TranscodingProtocol": "http",
+                "AudioCodec": "mp3", "MaxStreamingBitrate": "320000"}
+            if settings.jellyfin_user_id:
+                params["UserId"] = settings.jellyfin_user_id
         if "range" in request.headers:
             headers = {**headers, "Range": request.headers["range"]}
-        client: httpx.AsyncClient = request.app.state.client
-        upstream = await client.send(
-            client.build_request("GET", f"{settings.jellyfin.url}/Audio/{item_id}/universal", params=params, headers=headers),
-            stream=True,
-        )
+        upstream = await client.send(client.build_request("GET", url, params=params, headers=headers), stream=True)
         if upstream.status_code not in (200, 206):
             await upstream.aclose()
             raise HTTPException(502, "jellyfin refused the stream")

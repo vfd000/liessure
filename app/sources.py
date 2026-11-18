@@ -269,6 +269,31 @@ async def song(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
     return song_card(s, await _jellyfin_random(client, s, "Audio", unplayed=False))
 
 
+# Audio codecs every browser (and Android's WebView) plays from a plain file.
+BROWSER_AUDIO = {"mp3", "aac", "flac", "vorbis", "opus"}
+_codec_cache: dict[str, bool] = {}
+
+
+async def browser_plays(client: httpx.AsyncClient, s: Settings, item_id: str) -> bool:
+    """Whether a track's original file plays in the browser as-is (so it can be sent whole, with a length)."""
+    if item_id in _codec_cache:
+        return _codec_cache[item_id]
+    try:
+        params = {"ids": item_id, "Fields": "MediaSources"}
+        if s.jellyfin_user_id:
+            params["userId"] = s.jellyfin_user_id
+        r = await client.get(f"{s.jellyfin.url}/Items", params=params, headers=_jellyfin_headers(s))
+        r.raise_for_status()
+        item = (r.json().get("Items") or [{}])[0]
+        streams = [m for src in item.get("MediaSources") or [] for m in src.get("MediaStreams") or []]
+        codec = next((str(m.get("Codec", "")).lower() for m in streams if m.get("Type") == "Audio"), "")
+        ok = codec in BROWSER_AUDIO or codec.startswith("pcm_")
+    except (httpx.HTTPError, ValueError, KeyError, IndexError):
+        return False  # don't remember a failed lookup
+    _codec_cache[item_id] = ok
+    return ok
+
+
 def song_artist(item: dict[str, Any]) -> str:
     return item.get("AlbumArtist") or ", ".join(item.get("Artists") or [])
 
