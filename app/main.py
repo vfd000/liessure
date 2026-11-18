@@ -5,6 +5,8 @@ import hashlib
 import logging
 import random
 import re
+import sqlite3
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +21,8 @@ from pydantic import BaseModel, Field
 
 import dataclasses
 
-from . import auth, avoid, curator, lessons, profile, reader, sources
+from . import auth, avoid, curator, flashcards, lessons, profile, reader, sources
+from .config import LESSON_LABELS
 from .config import KINDS, MAX_PER_LOAD, OWNER_ONLY_KINDS, RECALL_KINDS, Settings
 from .store import Store
 
@@ -55,6 +58,23 @@ def pick_kinds(weights: dict[str, int], available: dict[str, bool], n: int, rng:
 class CardState(BaseModel):
     card: dict = Field(...)
     state: str = Field(pattern="^(done|later|)$")
+
+
+class DeckIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class FlashIn(BaseModel):
+    front: str = Field(min_length=1, max_length=2000)
+    back: str = Field(min_length=1, max_length=4000)
+
+
+class FromCard(BaseModel):
+    card: dict = Field(...)
+
+
+class Grade(BaseModel):
+    good: bool
 
 
 class AvoidTerm(BaseModel):
@@ -290,6 +310,8 @@ def create_app(
             kinds.discard("career")
         if not learns_korean(user):
             kinds.discard("kquiz")
+        if not store.decks(user):
+            kinds.discard("flashcard")
         return kinds
 
     async def one(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
@@ -310,6 +332,9 @@ def create_app(
             return sources.recall_card(row).to_dict() if row else None
         if kind == "career":
             return await own_career(client, user, rng)
+        if kind == "flashcard":
+            row = store.next_flashcard(user)
+            return flashcards.card_for(row, LESSON_LABELS.get(prefs_for(user).get("lang", ""), {})) if row else None
         if kind == "lesson":
             s = await profiles.get(client) if user == auth.OWNER else settings_for(user)
             return await lessons.card(client, s, store, user, lesson_prefs(user, s), rng)
@@ -579,6 +604,94 @@ def create_app(
         if state not in ("done", "later"):
             raise HTTPException(404)
         return {"cards": store.state_list(state, request.state.user)}
+
+    # ---------------------------------------------------------- flashcards
+    @app.get("/api/decks")
+    async def decks(request: Request):
+        return {"decks": store.decks(request.state.user)}
+
+    @app.post("/api/decks")
+    async def new_deck(request: Request, d: DeckIn):
+        return {"id": store.add_deck(d.name, request.state.user, source="made")}
+
+    @app.delete("/api/decks/{deck_id}")
+    async def delete_deck(request: Request, deck_id: int):
+        if not store.delete_deck(deck_id, request.state.user):
+            raise HTTPException(404)
+        return Response(status_code=204)
+
+    @app.get("/api/decks/{deck_id}/cards")
+    async def deck_cards(request: Request, deck_id: int):
+        return {"cards": store.deck_cards(deck_id, request.state.user)}
+
+    @app.post("/api/decks/{deck_id}/cards")
+    async def add_card(request: Request, deck_id: int, c: FlashIn):
+        try:
+            store.add_flashcards(deck_id, [(c.front.strip(), c.back.strip())], request.state.user)
+        except KeyError:
+            raise HTTPException(404, "no such deck")
+        return {"decks": store.decks(request.state.user)}
+
+    @app.delete("/api/flashcards/{card_id}")
+    async def delete_card(request: Request, card_id: int):
+        if not store.delete_flashcard(card_id, request.state.user):
+            raise HTTPException(404)
+        return Response(status_code=204)
+
+    @app.post("/api/decks/import")
+    async def import_deck(request: Request, name: str = Query("", max_length=80),
+                          filename: str = Query("", max_length=200)):
+        """A CSV/TSV (front, back) or an Anki .apkg, sent as the raw request body."""
+        data = await request.body()
+        if not data or len(data) > 200 * 2 ** 20:
+            raise HTTPException(400, "send the file as the request body (up to 200 MB)")
+        try:
+            cards = flashcards.parse(data, filename)
+        except (ValueError, zipfile.BadZipFile, sqlite3.DatabaseError) as e:
+            raise HTTPException(400, f"couldn't read that deck: {e}")
+        if not cards:
+            raise HTTPException(400, "no cards found (two columns: front, back)")
+        deck = store.add_deck(name or re.sub(r"\.\w+$", "", filename) or "Imported", request.state.user,
+                              source="anki" if data[:2] == b"PK" else "csv")
+        store.add_flashcards(deck, cards, request.state.user)
+        return {"id": deck, "cards": len(cards)}
+
+    @app.post("/api/decks/from-card")
+    async def flashcards_from_card(request: Request, body: FromCard):
+        """The LLM's flashcards from one feed card's text, into the person's "From my feed" deck."""
+        if not settings.curator_enabled:
+            raise HTTPException(409, "needs the LLM")
+        user = request.state.user
+        c = body.card
+        text = " ".join(str(c.get(k) or "") for k in ("subtitle", "blurb"))
+        try:
+            made = await curator.flashcards_from(request.app.state.client, settings_for(user), str(c.get("title", "")), text)
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"the LLM didn't answer: {type(e).__name__}")
+        if not made:
+            raise HTTPException(422, "nothing to make cards from")
+        name = "Desde mi feed" if prefs_for(user).get("lang") == "es" else "From my feed"
+        deck = store.deck_by_name(name, user) or store.add_deck(name, user, source="feed")
+        store.add_flashcards(deck, made, user)
+        return {"deck": deck, "made": [{"front": f, "back": b} for f, b in made]}
+
+    @app.get("/api/flashcards/next")
+    async def next_flashcard(request: Request, decks: str = "", skip: str = ""):
+        """Flashcard-only mode: the next due card from the chosen decks (comma-separated ids)."""
+        ids = [int(x) for x in decks.split(",") if x.strip().isdigit()][:50]
+        skips = {int(x) for x in skip.split(",") if x.strip().isdigit()}
+        row = store.next_flashcard(request.state.user, ids or None, skips or None)
+        if not row:
+            return {"card": None}
+        labels = LESSON_LABELS.get(prefs_for(request.state.user).get("lang", ""), {})
+        return {"card": flashcards.card_for(row, labels)}
+
+    @app.post("/api/flashcards/{card_id}/grade")
+    async def grade(request: Request, card_id: int, g: Grade):
+        out = store.grade_flashcard(card_id, g.good, request.state.user)
+        if out is None:
+            raise HTTPException(404)
+        return out
 
     @app.get("/api/history")
     async def history(request: Request, q: str = Query("", max_length=200), limit: int = Query(40, ge=1, le=100)):

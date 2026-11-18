@@ -17,6 +17,16 @@ const UI = {
     "Wikipedia": "Wikipedia", "News": "Noticias", "Videos": "Vídeos", "Movies": "Películas", "Series": "Series",
     "Music": "Música", "Photos": "Fotos", "Math": "Mates", "Recall": "Repaso", "Bite-size": "Bocados",
     "Lessons": "Lecciones", "Home": "Casa", "Languages": "Idiomas", "Careers": "Carreras",
+    "Make flashcards": "Hacer tarjetas", "Making…": "Haciendo…", "Made": "Hechas", "Couldn't make them": "No se pudieron hacer",
+    "Show answer": "Ver respuesta", "Again": "Otra vez", "Good": "Bien", "Next in": "Próxima en", "day": "día",
+    "days": "días", "Back in a few minutes": "Vuelve en unos minutos", "Couldn't save that": "No se pudo guardar",
+    "Exit flashcards": "Salir de tarjetas", "All done for now.": "Todo listo por ahora.", "Flashcards": "Tarjetas",
+    "Study selected": "Estudiar las elegidas", "Close": "Cerrar", "New deck": "Mazo nuevo", "Deck name": "Nombre del mazo",
+    "Create": "Crear", "Add a card": "Añadir una tarjeta", "Front": "Frente", "Back": "Reverso", "Add": "Añadir",
+    "Import (CSV, Quizlet export, Anki .apkg)": "Importar (CSV, Quizlet, Anki .apkg)", "Import": "Importar",
+    "No decks yet: make one or import one.": "Aún no hay mazos: crea o importa uno.", "Delete deck": "Borrar mazo",
+    "cards": "tarjetas", "due": "pendientes", "Added.": "Añadida.", "Importing…": "Importando…",
+    "Imported": "Importadas", "Couldn't import that": "No se pudo importar",
     "Search cards you've seen": "Buscar tarjetas que ya viste", "Later": "Después", "Done": "Hecho",
     "Done ✓": "Hecho ✓", "Later ↻": "Después ↻", "Back again": "De nuevo", "empty": "vacío",
     "Back to the feed": "Volver al feed", "Remove from Later": "Quitar de Después", "Found": "Encontradas",
@@ -126,6 +136,7 @@ function renderCard(c) {
   }
 
   if (c.quiz && (c.quiz.choices || c.quiz.answer !== undefined)) body.append(renderQuiz(c));
+  if (c.flash) body.append(renderFlash(c, card));
 
   const actions = el("div", "actions");
   if (c.more && c.more.url) {
@@ -202,16 +213,36 @@ function renderCard(c) {
     play.onclick = () => { playInline(card, c.embed); play.remove(); report(c, "play"); };
     actions.append(play);
   }
-  const go = el("a", (c.embed && c.embed.src) || c.quiz ? "" : "primary", c.open_label || t("Open"));
-  go.href = c.url;
-  go.target = "_blank";
-  go.rel = "noopener";
-  go.onclick = (e) => {
-    e.preventDefault();
-    report(c, "open");
-    if (c.translate && c.translate.text) openTranslate(c.translate, c.url); else openUrl(c.url, c.open_in_app);
-  };
-  actions.append(go);
+  if (MAKES_FLASHCARDS.has(c.kind)) {
+    const mk = el("button", "", t("Make flashcards"));
+    mk.onclick = async () => {
+      mk.disabled = true;
+      mk.textContent = t("Making…");
+      try {
+        const r = await fetch("/api/decks/from-card", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ card: c }) });
+        if (!r.ok) throw new Error(r.status);
+        const made = (await r.json()).made;
+        mk.textContent = `${t("Made")} ${made.length} 🃏`;
+      } catch {
+        mk.textContent = t("Couldn't make them");
+        mk.disabled = false;
+      }
+    };
+    actions.append(mk);
+  }
+  if (c.url) {
+    const go = el("a", (c.embed && c.embed.src) || c.quiz ? "" : "primary", c.open_label || t("Open"));
+    go.href = c.url;
+    go.target = "_blank";
+    go.rel = "noopener";
+    go.onclick = (e) => {
+      e.preventDefault();
+      report(c, "open");
+      if (c.translate && c.translate.text) openTranslate(c.translate, c.url); else openUrl(c.url, c.open_in_app);
+    };
+    actions.append(go);
+  }
   for (const a of c.actions || []) {
     if (a.speak) {
       const b = el("button", "", a.label);
@@ -247,6 +278,156 @@ function renderCard(c) {
   if (c.image) card.querySelector(".media").onclick = () => { report(c, "open"); openUrl(c.url, c.open_in_app); };
   return card;
 }
+
+// ------------------------------------------------------------------ flashcards
+const MAKES_FLASHCARDS = new Set(["wikipedia", "news", "bite", "infosec", "homelab"]);
+let study = null; // flashcard-only mode: {decks: [ids], skip: [ids]}
+
+// Front shown; Show answer reveals the back; Again (soon) or Good (spaced out).
+function renderFlash(c, cardEl) {
+  const box = el("div", "quiz");
+  const back = el("p", "flash-back", c.flash.back);
+  back.hidden = true;
+  const showBtn = el("button", "primary", t("Show answer"));
+  const row = el("div", "quiz-row");
+  row.hidden = true;
+  const result = el("p", "quiz-result");
+  const grade = async (good) => {
+    row.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+    try {
+      const r = await fetch(`/api/flashcards/${c.flash.id}/grade`, { method: "POST",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({ good }) });
+      const g = await r.json();
+      const days = Math.max(0, Math.round((g.due * 1000 - Date.now()) / 86400000));
+      result.textContent = good ? `${t("Next in")} ${days} ${t(days === 1 ? "day" : "days")}` : t("Back in a few minutes");
+    } catch { result.textContent = t("Couldn't save that"); }
+    if (study) setTimeout(nextStudyCard, 500);
+  };
+  const again = el("button", "", t("Again"));
+  const good = el("button", "primary", t("Good"));
+  again.onclick = () => grade(false);
+  good.onclick = () => grade(true);
+  row.append(again, good);
+  showBtn.onclick = () => { back.hidden = false; row.hidden = false; showBtn.remove(); report(c, "play"); };
+  box.append(showBtn, back, row, result);
+  return box;
+}
+
+async function nextStudyCard() {
+  if (!study) return;
+  let c = null;
+  try {
+    const q = new URLSearchParams({ decks: study.decks.join(","), skip: study.skip.join(",") });
+    c = (await (await fetch("/api/flashcards/next?" + q)).json()).card;
+  } catch {}
+  const exit = el("button", "chip", "✕ " + t("Exit flashcards"));
+  exit.onclick = () => { study = null; reset(); };
+  feed.replaceChildren(exit);
+  if (!c) {
+    feed.append(el("div", "empty", t("All done for now.")));
+    return;
+  }
+  study.skip.push(c.flash.id);
+  feed.append(renderCard(c));
+  scrollTo({ top: 0 });
+}
+
+function startStudy(deckIds) {
+  study = { decks: deckIds, skip: [] };
+  searching = true;
+  generation++;
+  nextStudyCard();
+}
+
+// The decks dialog: pick decks to study, make a deck, add a card, import CSV / Anki .apkg.
+const deckDialog = (() => {
+  const d = el("dialog", "ideas");
+  d.innerHTML = `<form method="dialog"><h2></h2><div class="deck-list"></div>
+    <div class="actions"><button class="primary" value="study" type="button"></button><button value="close"></button></div>
+    <h3 class="sub"></h3><div class="quiz-row"><input class="new-deck" maxlength="80"><button type="button" class="mk-deck"></button></div>
+    <h3 class="sub add-h"></h3><div class="quiz-row"><select class="add-deck"></select></div>
+    <div class="quiz-row"><input class="front" maxlength="2000"><input class="back" maxlength="4000"><button type="button" class="add-card"></button></div>
+    <h3 class="sub imp-h"></h3><div class="quiz-row"><input type="file" class="file" accept=".csv,.tsv,.txt,.apkg,.colpkg"><button type="button" class="imp"></button></div>
+    <p class="why status"></p></form>`;
+  document.body.append(d);
+  return d;
+})();
+
+async function openDecks() {
+  const d = deckDialog;
+  const $ = (s) => d.querySelector(s);
+  $("h2").textContent = t("Flashcards");
+  $('button[value="study"]').textContent = t("Study selected");
+  $('button[value="close"]').textContent = t("Close");
+  $("h3.sub").textContent = t("New deck");
+  $(".new-deck").placeholder = t("Deck name");
+  $(".mk-deck").textContent = t("Create");
+  $(".add-h").textContent = t("Add a card");
+  $(".front").placeholder = t("Front");
+  $(".back").placeholder = t("Back");
+  $(".add-card").textContent = t("Add");
+  $(".imp-h").textContent = t("Import (CSV, Quizlet export, Anki .apkg)");
+  $(".imp").textContent = t("Import");
+  const status = $(".status");
+  const refresh = async () => {
+    const decks = (await (await fetch("/api/decks")).json()).decks;
+    const list = $(".deck-list");
+    list.replaceChildren();
+    $(".add-deck").replaceChildren(...decks.map((k) => { const o = el("option", "", k.name); o.value = k.id; return o; }));
+    if (!decks.length) list.append(el("p", "why", t("No decks yet: make one or import one.")));
+    for (const k of decks) {
+      const row = el("label", "deck-row");
+      const cb = el("input");
+      cb.type = "checkbox";
+      cb.value = k.id;
+      cb.checked = true;
+      const del = el("button", "chip", "🗑");
+      del.type = "button";
+      del.onclick = async (e) => {
+        e.preventDefault();
+        if (!confirm(`${t("Delete deck")} "${k.name}"?`)) return;
+        await fetch(`/api/decks/${k.id}`, { method: "DELETE" });
+        refresh();
+      };
+      row.append(cb, el("span", "", ` ${k.name} · ${k.cards} ${t("cards")} · ${k.due} ${t("due")} `), del);
+      list.append(row);
+    }
+  };
+  $('button[value="study"]').onclick = () => {
+    const ids = [...d.querySelectorAll(".deck-list input:checked")].map((x) => x.value);
+    d.close();
+    startStudy(ids);
+  };
+  $(".mk-deck").onclick = async () => {
+    const name = $(".new-deck").value.trim();
+    if (!name) return;
+    await fetch("/api/decks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }) });
+    $(".new-deck").value = "";
+    refresh();
+  };
+  $(".add-card").onclick = async () => {
+    const front = $(".front").value.trim(), back = $(".back").value.trim();
+    if (!front || !back || !$(".add-deck").value) return;
+    await fetch(`/api/decks/${$(".add-deck").value}/cards`, { method: "POST",
+      headers: { "content-type": "application/json" }, body: JSON.stringify({ front, back }) });
+    $(".front").value = $(".back").value = "";
+    status.textContent = t("Added.");
+    refresh();
+  };
+  $(".imp").onclick = async () => {
+    const f = $(".file").files[0];
+    if (!f) return;
+    status.textContent = t("Importing…");
+    const r = await fetch("/api/decks/import?" + new URLSearchParams({ filename: f.name }), { method: "POST", body: f });
+    const j = await r.json().catch(() => ({}));
+    status.textContent = r.ok ? `${t("Imported")} ${j.cards} ${t("cards")}` : (j.detail || t("Couldn't import that"));
+    refresh();
+  };
+  status.textContent = "";
+  await refresh().catch(() => {});
+  d.showModal();
+}
+document.getElementById("decks").onclick = openDecks;
 
 // Swipe a card: left = done (off the feed, onto the Done list), right = later (the Later list, and back in
 // the feed on a spaced schedule). Only clearly sideways drags count, so scrolling and pull-down still work.
@@ -630,6 +811,7 @@ function reset() {
   loading = false;
   offline = false;
   searching = false;
+  study = null;
   shown = new Set();
   rendered = [];
   feed.replaceChildren();

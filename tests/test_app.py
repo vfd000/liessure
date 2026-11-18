@@ -284,7 +284,7 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz"):
+        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard"):
             continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
@@ -689,7 +689,10 @@ def test_math_card_offers_a_quiz(client):
     assert tutor["label"] == "Tutor me" and tutor["url"].startswith("https://claude.ai/new?q=")
     from urllib.parse import parse_qs, urlparse
     q = parse_qs(urlparse(tutor["url"]).query)["q"][0]
-    assert card["title"] in q and "Don't give me the answer" in q and card["quiz"]["answer"] in q
+    import base64
+    assert card["title"] in q and "Don't give me the answer" in q
+    assert base64.b64encode(card["quiz"]["answer"].encode()).decode() in q  # there for Claude, not readable at a glance
+    assert f"the answer is {card['quiz']['answer']}" not in q
     assert card["url"].startswith("https://en.wikipedia.org/wiki/")
 
 
@@ -1619,7 +1622,7 @@ def test_cards_shown_can_be_found_again():
         cards = c.get("/api/feed?n=8").json()["cards"]
         assert cards
         first = cards[0]
-        word = first["title"].split()[0]
+        word = first["title"]  # every word of it must match
         found = c.get("/api/history", params={"q": word}).json()["cards"]
         assert any(x["title"] == first["title"] for x in found)
         assert c.get("/api/history", params={"q": "zzzz nothing like this"}).json()["cards"] == []
@@ -1684,4 +1687,62 @@ def test_swiped_cards_go_to_done_and_later_lists():
     st.set_state({"kind": "news", "ref": "keep", "title": "Keep me"}, "later")
     st.remember_shown([{"kind": "news", "ref": str(n), "title": f"S{n}"} for n in range(5)])
     assert st.state_list("later")[0]["title"] == "Keep me"  # trimming history never drops a swiped card
+
+
+def test_flashcards_decks_import_review_and_study():
+    import io
+    import sqlite3 as sq
+    import tempfile
+    import zipfile
+    from app import flashcards as fc
+    assert fc.parse_csv(b"front,back\nhola,hello\ngato,cat\n") == [("hola", "hello"), ("gato", "cat")]
+    assert fc.parse_csv(b"uno\tone\ndos\ttwo\n") == [("uno", "one"), ("dos", "two")]
+    # A tiny Anki package: collection.anki2 with notes whose fields are joined by \x1f.
+    with tempfile.NamedTemporaryFile(suffix=".anki2") as f:
+        db = sq.connect(f.name)
+        db.execute("CREATE TABLE notes (id INTEGER, flds TEXT)")
+        db.execute("INSERT INTO notes VALUES (1, ?)", ("<b>犬</b>\x1fdog<br>[sound:inu.mp3]",))
+        db.execute("INSERT INTO notes VALUES (2, ?)", ("猫\x1fcat&nbsp;",))
+        db.commit()
+        db.close()
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.write(f.name, "collection.anki2")
+            z.writestr("media", "{}")
+    apkg = buf.getvalue()
+    assert fc.parse_apkg(apkg) == [("犬", "dog"), ("猫", "cat")]
+    newer = io.BytesIO()
+    with zipfile.ZipFile(newer, "w") as z:
+        z.writestr("collection.anki21b", b"zstd...")
+    try:
+        fc.parse_apkg(newer.getvalue())
+        raise AssertionError("should refuse the newest format")
+    except ValueError as e:
+        assert "older Anki versions" in str(e)
+
+    with make_client(full_settings()) as c:
+        assert not c.get("/api/sources").json()["sources"]["flashcard"]["configured"]  # no decks yet
+        r = c.post("/api/decks/import?filename=animals.apkg", content=apkg)
+        assert r.status_code == 200 and r.json()["cards"] == 2
+        deck = r.json()["id"]
+        made = c.post("/api/decks", json={"name": "Spanish"}).json()["id"]
+        c.post(f"/api/decks/{made}/cards", json={"front": "hola", "back": "hello"})
+        decks = {d["name"]: d for d in c.get("/api/decks").json()["decks"]}
+        assert decks["animals"]["cards"] == 2 and decks["animals"]["due"] == 2 and decks["Spanish"]["cards"] == 1
+        assert c.get("/api/sources").json()["sources"]["flashcard"]["configured"]
+        # Flashcard-only mode, one deck: its cards in order; Good moves one out, Again brings it back soon.
+        first = c.get(f"/api/flashcards/next?decks={deck}").json()["card"]
+        assert first["title"] == "犬" and first["flash"]["back"] == "dog"
+        g = c.post(f"/api/flashcards/{first['flash']['id']}/grade", json={"good": True}).json()
+        assert g["box"] == 1
+        second = c.get(f"/api/flashcards/next?decks={deck}").json()["card"]
+        assert second["title"] == "猫"
+        c.post(f"/api/flashcards/{second['flash']['id']}/grade", json={"good": False})
+        assert c.get(f"/api/flashcards/next?decks={deck}").json()["card"] is None  # nothing due right now
+        # In the feed, flashcards from any deck.
+        feed_card = c.get("/api/card/flashcard").json()
+        assert feed_card["kind"] == "flashcard" and feed_card["title"] == "hola"
+        assert c.post("/api/decks/import?filename=x.csv", content=b"nothing here").status_code == 400
+        assert c.delete(f"/api/decks/{deck}").status_code == 204
+        assert [d["name"] for d in c.get("/api/decks").json()["decks"]] == ["Spanish"]
 

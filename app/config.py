@@ -48,11 +48,12 @@ DEFAULT_WEIGHTS = {
     "lesson": 3,
     "career": 2,
     "kquiz": 2,
+    "flashcard": 3,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "flashcard": 2}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
 RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite"})
@@ -71,7 +72,7 @@ RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "
 LESSON_LABELS: dict[str, dict[str, str]] = {
     "es": {"translation": "Traducción", "reading": "lectura", "phrase": "frase", "open": "Abrir",
            "explain": "Ver explicación", "hear": "Escuchar", "note": "Nota", "translate": "Traducir",
-           "ask": "¿Qué significa?",
+           "ask": "¿Qué significa?", "flashcard": "Tarjeta",
            "llm": "Escrito por el LLM: Traducir lo comprueba."},
 }
 

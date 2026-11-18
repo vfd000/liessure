@@ -1703,7 +1703,8 @@ def tutor_url(p: "mathgen.Problem", lang: str = "") -> str:
     prompt = ((f"Reply only in {lang}, the whole conversation.\n\n" if lang else "") + f"Tutor me through this {p.topic} problem step by step, like a patient teacher. Don't give me the "
               f"answer: ask what I'd try first, check each step I send, and give a hint only when I'm stuck.\n\n"
               f"Problem: {p.question}" + (f" (answer {p.answer_note})" if p.answer_note else "") +
-              f"\n\nFor you, not me: the answer is {p.answer}. Only confirm it once I've reached it or ask for it.")
+              f"\n\nFor you, not me (base64, so I don't see it): {base64.b64encode(p.answer.encode()).decode()}. "
+              f"Decode it silently, and only confirm it once I've reached it or ask for it.")
     return "https://claude.ai/new?" + urlencode({"q": prompt})
 
 
@@ -1750,6 +1751,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "lesson": bite,  # also served by main.py from a per-person pool
     "career": bite,  # likewise
     "kquiz": kquiz_card,
+    "flashcard": bite,  # served by main.py from the person's decks
 }
 
 
@@ -1777,4 +1779,5 @@ def configured(s: Settings) -> dict[str, bool]:
         "lesson": bool(s.llm_url and s.llm_key),
         "career": bool(s.llm_url and s.llm_key),
         "kquiz": True,  # only for readers learning Korean (main.kinds_for)
+        "flashcard": True,  # only for people with flashcards due (main.kinds_for)
     }
