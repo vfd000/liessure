@@ -80,6 +80,15 @@ CREATE TABLE IF NOT EXISTS history (         -- every card the feed showed someo
     PRIMARY KEY (user, key)
 );
 CREATE INDEX IF NOT EXISTS history_user_ts ON history (user, ts);
+CREATE TABLE IF NOT EXISTS decks (
+    id INTEGER PRIMARY KEY, user TEXT NOT NULL, name TEXT NOT NULL, source TEXT NOT NULL DEFAULT '', created REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS flashcards (
+    id INTEGER PRIMARY KEY, deck_id INTEGER NOT NULL, user TEXT NOT NULL, front TEXT NOT NULL, back TEXT NOT NULL,
+    box INTEGER NOT NULL DEFAULT 0, due REAL NOT NULL DEFAULT 0, created REAL NOT NULL,
+    reviews INTEGER NOT NULL DEFAULT 0, lapses INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS flashcards_due ON flashcards (user, due);
 CREATE TABLE IF NOT EXISTS avoid (          -- topics a reader never wants (avoid.py)
     user TEXT NOT NULL, term TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (user, term)
 );
@@ -369,6 +378,92 @@ class Store:
                 f"SELECT card FROM history WHERE user = ? AND {where} ORDER BY ts DESC LIMIT ?",
                 (user, *args, limit)).fetchall()
         return [json.loads(r["card"]) for r in rows]
+
+    # --- flashcards (flashcards.py)
+    FLASH_DAYS = (1, 3, 7, 21, 60, 180)
+    AGAIN_MINUTES = 10
+
+    def add_deck(self, name: str, user: str = "owner", source: str = "") -> int:
+        with self._lock, self._db:
+            cur = self._db.execute("INSERT INTO decks (user, name, source, created) VALUES (?, ?, ?, ?)",
+                                   (user, name.strip()[:80] or "Deck", source[:40], time.time()))
+        return int(cur.lastrowid)
+
+    def deck_by_name(self, name: str, user: str = "owner") -> int | None:
+        with self._lock:
+            row = self._db.execute("SELECT id FROM decks WHERE user = ? AND name = ?", (user, name)).fetchone()
+        return row["id"] if row else None
+
+    def decks(self, user: str = "owner") -> list[dict[str, Any]]:
+        now = time.time()
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT d.id, d.name, d.source, COUNT(f.id) AS cards, "
+                "COALESCE(SUM(CASE WHEN f.due <= ? THEN 1 ELSE 0 END), 0) AS due "
+                "FROM decks d LEFT JOIN flashcards f ON f.deck_id = d.id WHERE d.user = ? "
+                "GROUP BY d.id ORDER BY d.created", (now, user)).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_deck(self, deck_id: int, user: str = "owner") -> bool:
+        with self._lock, self._db:
+            cur = self._db.execute("DELETE FROM decks WHERE id = ? AND user = ?", (deck_id, user))
+            self._db.execute("DELETE FROM flashcards WHERE deck_id = ? AND user = ?", (deck_id, user))
+        return cur.rowcount == 1
+
+    def add_flashcards(self, deck_id: int, cards: list[tuple[str, str]], user: str = "owner") -> int:
+        now = time.time()
+        with self._lock, self._db:
+            if not self._db.execute("SELECT 1 FROM decks WHERE id = ? AND user = ?", (deck_id, user)).fetchone():
+                raise KeyError("no such deck")
+            # New cards are due now, a little apart so they come in the order they were given.
+            self._db.executemany(
+                "INSERT INTO flashcards (deck_id, user, front, back, due, created) VALUES (?, ?, ?, ?, ?, ?)",
+                [(deck_id, user, f, b, now + i / 1000, now) for i, (f, b) in enumerate(cards)])
+        return len(cards)
+
+    def deck_cards(self, deck_id: int, user: str = "owner", limit: int = 500) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, front, back, box, due FROM flashcards WHERE deck_id = ? AND user = ? ORDER BY id LIMIT ?",
+                (deck_id, user, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_flashcard(self, card_id: int, user: str = "owner") -> bool:
+        with self._lock, self._db:
+            cur = self._db.execute("DELETE FROM flashcards WHERE id = ? AND user = ?", (card_id, user))
+        return cur.rowcount == 1
+
+    def next_flashcard(self, user: str = "owner", decks: list[int] | None = None,
+                       skip: set[int] | None = None) -> dict[str, Any] | None:
+        """The most overdue card (from these decks, if given)."""
+        where, args = "f.user = ? AND f.due <= ?", [user, time.time()]
+        if decks:
+            where += f" AND f.deck_id IN ({','.join('?' * len(decks))})"
+            args += decks
+        if skip:
+            where += f" AND f.id NOT IN ({','.join('?' * len(skip))})"
+            args += list(skip)
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT f.id, f.front, f.back, f.deck_id, d.name AS deck_name FROM flashcards f "
+                f"JOIN decks d ON d.id = f.deck_id WHERE {where} ORDER BY f.due LIMIT 1", args).fetchone()
+        return dict(row) if row else None
+
+    def grade_flashcard(self, card_id: int, good: bool, user: str = "owner") -> dict[str, Any] | None:
+        now = time.time()
+        with self._lock, self._db:
+            row = self._db.execute("SELECT box FROM flashcards WHERE id = ? AND user = ?", (card_id, user)).fetchone()
+            if not row:
+                return None
+            if good:  # up a box: 1, 3, 7, 21, 60, then 180 days
+                box = min(row["box"] + 1, len(self.FLASH_DAYS))
+                due = now + self.FLASH_DAYS[box - 1] * 86400
+            else:
+                box, due = 0, now + self.AGAIN_MINUTES * 60
+            self._db.execute(
+                "UPDATE flashcards SET box = ?, due = ?, reviews = reviews + 1, lapses = lapses + ? WHERE id = ?",
+                (box, due, 0 if good else 1, card_id))
+        return {"box": box, "due": due}
 
     # --- disinterests
     def avoid_list(self, user: str = "owner") -> list[str]:
