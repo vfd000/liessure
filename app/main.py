@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import random
 import re
@@ -23,6 +24,16 @@ from .store import Store
 log = logging.getLogger("liessure")
 STATIC = Path(__file__).parent / "static"
 PER_CARD_TIMEOUT = 8.0
+
+
+class FreshStaticFiles(StaticFiles):
+    """The page's code always revalidates. Without a Cache-Control header the WebView guessed a freshness
+    from Last-Modified and kept running an old app.js for hours after a deploy."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def pick_kinds(weights: dict[str, int], available: dict[str, bool], n: int, rng: random.Random) -> list[str]:
@@ -331,10 +342,17 @@ def create_app(
         return StreamingResponse(upstream.aiter_raw(), status_code=upstream.status_code, headers=passthrough,
                                  background=BackgroundTask(upstream.aclose))
 
+    # The page names its code by content hash, so a phone holding an old app.js gets the new one at once.
+    def _ver(name: str) -> str:
+        return hashlib.sha1((STATIC / name).read_bytes()).hexdigest()[:10]
+    index_html = (STATIC / "index.html").read_text()
+    for name in ("app.js", "style.css"):
+        index_html = index_html.replace(f'"/{name}"', f'"/{name}?v={_ver(name)}"')
+
     @app.get("/")
     async def index():
-        return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+        return Response(index_html, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
-    app.mount("/", StaticFiles(directory=STATIC), name="static")
+    app.mount("/", FreshStaticFiles(directory=STATIC), name="static")
     return app
 

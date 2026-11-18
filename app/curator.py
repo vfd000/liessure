@@ -599,7 +599,8 @@ def phrase_actions(native: str, code: str) -> list[dict[str, Any]]:
     translate = "https://translate.google.com/?" + urlencode({"sl": gt or "auto", "tl": "en", "text": native,
                                                               "op": "translate"})
     return [{"label": "Hear it", "speak": {"text": native, "lang": tag, "fallback": translate}},
-            {"label": "Google Translate", "url": translate}]
+            # In the app's own WebView: Google's Android app catches the link and drops the phrase.
+            {"label": "Google Translate", "url": translate, "in_app": "1"}]
 
 
 def code_for_label(s: Settings, label: str) -> str:
