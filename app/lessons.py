@@ -146,7 +146,7 @@ async def _phrases(client: httpx.AsyncClient, s: Settings, prefs: dict[str, Any]
             details=details, details_label=labels.get("explain", "Explain"),
             actions=[_hear(text, learn["code"], to, labels.get("hear", "Hear it"))],
             ref=f"lesson:{learn['code']}:{text}")
-        out.append(card.to_dict())
+        out.append({**card.to_dict(), "lesson_v": 2})
     return out
 
 
@@ -168,14 +168,30 @@ async def refill(client: httpx.AsyncClient, s: Settings, store: Store, user: str
     return len(picks)
 
 
+def _outdated(c: dict[str, Any]) -> bool:
+    """A phrase card made before phrase cards asked what they mean (it just states the answer). Newer ones
+    are marked, so one the LLM gave no wrong answers for isn't thrown away."""
+    return (str(c.get("url", "")).startswith("https://translate.google.com") and not c.get("quiz")
+            and not c.get("lesson_v"))
+
+
+def _take(store: Store, user: str, rng: random.Random) -> dict[str, Any] | None:
+    for _ in range(10):
+        pick = store.take(pool(user), rng.random())
+        if not pick or not _outdated(pick["card"]):
+            return pick
+        store.drop(pool(user), pick["ref"])
+    return None
+
+
 async def card(client: httpx.AsyncClient, s: Settings, store: Store, user: str, prefs: dict[str, Any],
                rng: random.Random) -> dict[str, Any] | None:
-    pick = store.take(pool(user), rng.random())
+    pick = _take(store, user, rng)
     if not pick:
         try:
             await refill(client, s, store, user, prefs, rng)
         except httpx.HTTPError as e:
             log.warning("lessons for %s: %s", user, e)
             return None
-        pick = store.take(pool(user), rng.random())
+        pick = _take(store, user, rng)
     return pick["card"] if pick else None
