@@ -154,6 +154,7 @@ def _wiki_cand(page: dict, lang: str, source: str, label: str = "Wikipedia") -> 
         kind="wikipedia", label=label, title=title, subtitle=page.get("description") or "",
         blurb=sources._clip(extract, 1500), image=(page.get("thumbnail") or {}).get("source") or "",
         url=url, ref=f"{lang}:{title}" if lang != "en" else title,
+        geo=sources.geo_of(page.get("coordinates"), title),
     ).to_dict()
     tag = f"({source}) " if not source.startswith(("random", "mostread")) else ""
     if lang != "en":
@@ -164,7 +165,7 @@ def _wiki_cand(page: dict, lang: str, source: str, label: str = "Wikipedia") -> 
 
 WIKI_PROPS = {
     "action": "query", "format": "json", "formatversion": "2",
-    "prop": "extracts|pageimages|description", "exintro": "1", "explaintext": "1",
+    "prop": "extracts|pageimages|description|coordinates", "exintro": "1", "explaintext": "1",
     "exsentences": "5", "exlimit": "max", "piprop": "thumbnail", "pithumbsize": "800",
 }
 

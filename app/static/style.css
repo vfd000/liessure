@@ -111,6 +111,9 @@ body {
 .ideas h3.sub { font-size: 15px; margin: 14px 0 6px; }
 .ideas select, .ideas input:not([type=checkbox]) { font: inherit; padding: 6px 8px; border-radius: 8px;
   border: 1px solid currentColor; background: transparent; color: inherit; min-width: 0; flex: 1; }
+.map { margin: 10px 0; }
+.map iframe { width: 100%; height: 220px; border: 0; border-radius: 8px; display: block; }
+.map a { display: inline-block; margin-top: 6px; font-size: 14px; }
 .signout { text-decoration: none; color: inherit; }
 .ideas { width: min(560px, calc(100vw - 32px)); border: 0; border-radius: 12px; padding: 16px;
   background: var(--card, #1c1f24); color: inherit; }
