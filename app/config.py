@@ -39,14 +39,19 @@ DEFAULT_WEIGHTS = {
     "skill": 1,
     "telemetry": 1,
     "home": 1,
+    "math": 2,
+    "recall": 2,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1}
+
+# Cards whose text is kept when you open or play them, to quiz you on later.
+RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video"})
 
 # Kinds whose titles never go to the LLM as evidence of what you like.
-UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home"})
+UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall"})
 
 KINDS = tuple(DEFAULT_WEIGHTS)
 

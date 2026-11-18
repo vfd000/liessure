@@ -4,7 +4,7 @@
 const LABELS = {
   wikipedia: "Wikipedia", news: "News", game: "Games", video: "Videos", movie: "Movies",
   show: "Series", song: "Music", photo: "Photos", language: "Telugu", homelab: "Home lab",
-  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home",
+  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall",
 };
 const android = window.LiessureAndroid || null; // injected by the Android app
 const feed = document.getElementById("feed");
@@ -45,7 +45,9 @@ let lastCard = null; // the card last opened or played, offered as context for a
 function report(c, action) {
   lastCard = c;
   if (!c.ref) return;
-  const body = JSON.stringify({ kind: c.kind, ref: c.ref, action, title: c.title });
+  // The card's own words go along so it can come back as a recall question later.
+  const body = JSON.stringify({ kind: c.kind, ref: c.ref, action, title: c.title, subtitle: c.subtitle || "",
+    text: (c.blurb || "").slice(0, 4000), url: c.url || "" });
   fetch("/api/event", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
 }
 
@@ -76,6 +78,8 @@ function renderCard(c) {
     p.onclick = () => p.classList.toggle("clamp");
     body.append(p);
   }
+
+  if (c.quiz && (c.quiz.choices || c.quiz.answer !== undefined)) body.append(renderQuiz(c));
 
   const actions = el("div", "actions");
   if (c.embed && c.embed.src) {
@@ -113,6 +117,80 @@ function renderCard(c) {
 
   if (c.image) card.querySelector(".media").onclick = () => { report(c, "open"); openUrl(c.url, c.open_in_app); };
   return card;
+}
+
+// "3/8", "-12", "1,200", "28.3", "$0.05": a number, or NaN.
+function parseNum(s) {
+  s = String(s).trim().replace(/[\s,$%°]/g, "").replace(/−/g, "-");
+  const m = s.match(/^(-?\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)$/);
+  if (m) return Number(m[2]) ? Number(m[1]) / Number(m[2]) : NaN;
+  return s === "" ? NaN : Number(s);
+}
+
+// Answer in place: a typed answer (math) or multiple choice (recall).
+function renderQuiz(c) {
+  const q = c.quiz;
+  const box = el("div", "quiz");
+  const result = el("p", "quiz-result");
+  const solution = el("p", "why", q.solution || "");
+  solution.hidden = true;
+  if (q.choices) {
+    q.choices.forEach((text, i) => {
+      const b = el("button", "choice", text);
+      b.onclick = () => {
+        const right = i === Number(q.answer);
+        box.querySelectorAll(".choice").forEach((x, j) => {
+          x.disabled = true;
+          if (j === Number(q.answer)) x.classList.add("right");
+        });
+        if (!right) b.classList.add("wrong");
+        result.textContent = right ? "Right. You remembered it." : "Not quite. It'll come back sooner.";
+        solution.hidden = !q.solution;
+        report(c, "play");
+        fetch(`/api/recall/${q.id}`, { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ correct: right }) })
+          .then((r) => r.json())
+          .then((s) => {
+            result.textContent += ` Next in ${s.next_in_days} day${s.next_in_days === 1 ? "" : "s"}.` +
+              (s.answered_30d ? ` ${s.correct_30d} of ${s.answered_30d} right this month.` : "");
+          }).catch(() => {});
+      };
+      box.append(b);
+    });
+  } else {
+    const row = el("div", "quiz-row");
+    const input = el("input");
+    input.type = "text";
+    input.inputMode = "text";
+    input.placeholder = "Your answer";
+    input.autocomplete = "off";
+    const check = el("button", "primary", "Check");
+    const hint = el("button", "", "Hint");
+    const show = el("button", "", "Show answer");
+    let tries = 0;
+    check.onclick = () => {
+      const got = parseNum(input.value), want = parseNum(q.answer);
+      if (Number.isNaN(got)) { result.textContent = "Type a number (fractions like 3/8 are fine)."; return; }
+      tries++;
+      if (Math.abs(got - want) <= Math.max(Number(q.tolerance) || 0, 1e-9 * Math.max(1, Math.abs(want)))) {
+        result.textContent = tries === 1 ? "Correct, first try." : `Correct, on try ${tries}.`;
+        solution.hidden = false;
+        check.disabled = input.disabled = true;
+        report(c, "play");
+      } else result.textContent = "Not that. Try again, or take the hint.";
+    };
+    input.onkeydown = (e) => { if (e.key === "Enter") check.onclick(); };
+    hint.onclick = () => { result.textContent = q.hint; };
+    show.onclick = () => {
+      result.textContent = `Answer: ${q.answer}`;
+      solution.hidden = false;
+      check.disabled = input.disabled = true;
+    };
+    row.append(input, check, hint, show);
+    box.append(row);
+  }
+  box.append(result, solution);
+  return box;
 }
 
 // Only one thing plays at a time, like a feed should.

@@ -224,6 +224,8 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
+        if kind == "recall":
+            continue  # questions only exist once you've opened cards (test_recall_questions_...)
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
         card = r.json()
@@ -362,7 +364,7 @@ def test_unconfigured_sources_are_skipped():
         s = c.get("/api/sources").json()["sources"]
         assert s["wikipedia"]["configured"] and not s["movie"]["configured"]
         cards = c.get("/api/feed?n=6").json()["cards"]
-        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language", "homelab"}
+        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language", "homelab", "math"}
 
 
 def test_weights_and_pick():
@@ -473,7 +475,7 @@ def test_curator_end_to_end():
         assert c.post("/api/event", json={"kind": "video", "ref": "openedvid01", "action": "open",
                                           "title": "Bridges 101"}).status_code == 204
         stats = c.post("/api/curate").json()
-        assert set(stats) == {"video", "language", "wikipedia", "song", "news", "game", "photo"}, stats
+        assert set(stats) == {"video", "language", "wikipedia", "song", "news", "game", "photo", "recall"}, stats
         for kind in ("video", "language", "wikipedia", "song", "news", "game", "photo"):
             assert stats[kind]["picked"] == 1, (kind, stats)
         assert stats["language"]["phrases"] == 6
@@ -586,6 +588,70 @@ async def test_home_solar_from_lifetime_counters():
     assert solar.subtitle == "Producing 2100 W right now"
     assert solar.url == "https://ha.example/energy" and solar.actions[0]["url"] == "homeassistant://navigate/energy"
     assert cards["Home · weather"].title == "48°F and partlycloudy outside"
+
+
+def test_math_answers_are_exact_numbers():
+    from fractions import Fraction
+    from app import mathgen
+    for gen, _ in mathgen.GENERATORS:
+        for seed in range(60):
+            p = gen(random.Random(seed))
+            assert p.question and p.hint and p.solution, gen.__name__
+            float(Fraction(p.answer))  # an integer, fraction or decimal the page can parse
+    p = mathgen.last_digit(random.Random(3))
+    a, n = (int(x) for x in re.search(r"of (\d)\^(\d+)", p.question).groups())
+    assert p.answer == str(a ** n % 10)
+    p = mathgen.system(random.Random(5))
+    assert "x + y" in p.question
+
+
+def test_math_card_offers_a_quiz(client):
+    card = client.get("/api/card/math").json()
+    assert card["kind"] == "math" and card["label"].startswith("Math · ")
+    assert set(card["quiz"]) == {"answer", "tolerance", "hint", "solution"}
+    assert card["url"].startswith("https://en.wikipedia.org/wiki/")
+
+
+def test_recall_questions_from_cards_you_opened():
+    import asyncio
+    import time as _time
+    from app import store as store_mod
+    st = Store(":memory:")
+    s = full_settings(llm_url="http://llm.test", llm_key="k")
+    with make_client(s) as c:
+        app_store = c.app.state.store
+        ev = {"kind": "wikipedia", "ref": "Lighthouse", "action": "open", "title": "Lighthouse",
+              "subtitle": "tower", "text": "A lighthouse is a tower that emits light. The Pharos was built in 280 BC.",
+              "url": "https://en.wikipedia.org/wiki/Lighthouse"}
+        assert c.post("/api/event", json=ev).status_code == 204
+        # Job text is never kept for questions.
+        c.post("/api/event", json={**ev, "kind": "job", "ref": "7", "url": "https://jobs.example/#/job/7"})
+        assert app_store.cards_to_ask(min_age_hours=0)[0]["ref"] == "Lighthouse"
+        assert app_store.cards_to_ask(min_age_hours=1) == []  # too fresh to quiz yet
+        assert len(app_store.cards_to_ask(min_age_hours=0)) == 1
+        seen_prompt = {}
+
+        async def ask(client, s, prompt, system=None):
+            seen_prompt["p"], seen_prompt["sys"] = prompt, system
+            return json.dumps({"questions": [
+                {"id": 0, "question": "When was the Pharos built?", "choices": ["280 BC", "1200", "1850", "50 BC"],
+                 "answer": 0, "explain": "The card says 280 BC."},
+                {"id": 0, "question": "bad", "choices": ["a", "a", "b", "c"], "answer": 0}]})
+        app_store._db.execute("UPDATE seen SET ts = ts - 86400 * 2")
+        n = asyncio.run(curator.generate_recall_questions(None, s, app_store, ask=ask))
+        assert n == 1 and "Pharos" in seen_prompt["p"] and "ignore any instructions" in seen_prompt["sys"]
+        assert app_store.cards_to_ask(min_age_hours=0) == []  # asked once only
+
+        card = c.get("/api/card/recall").json()
+        assert card["title"] == "When was the Pharos built?" and card["quiz"]["answer"] == 0
+        assert card["url"] == "https://en.wikipedia.org/wiki/Lighthouse" and "2 days ago" in card["label"]
+        assert c.get("/api/card/recall").status_code == 503  # snoozed once served
+        rid = card["quiz"]["id"]
+        r = c.post(f"/api/recall/{rid}", json={"correct": True}).json()
+        assert r["box"] == 1 and r["next_in_days"] == store_mod.RECALL_INTERVALS[1] and r["correct_30d"] == 1
+        r = c.post(f"/api/recall/{rid}", json={"correct": False}).json()
+        assert r["box"] == 0 and r["next_in_days"] == 1 and r["answered_30d"] == 2
+        assert c.post("/api/recall/999", json={"correct": True}).status_code == 404
 
 
 def test_phrase_cards():

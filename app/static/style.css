@@ -100,6 +100,15 @@ body {
 .ideas label { display: block; margin: 8px 0; font-size: 14px; }
 .idea-list { padding-left: 18px; margin: 10px 0 0; font-size: 14px; color: var(--muted); }
 .idea-list li.done, .idea-list li.dropped { text-decoration: line-through; }
+.quiz { margin: 10px 0; }
+.quiz-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.quiz input { flex: 1 1 140px; min-width: 0; font: inherit; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid currentColor; background: transparent; color: inherit; }
+.quiz .choice { display: block; width: 100%; text-align: left; margin: 6px 0; padding: 10px 12px;
+  border-radius: 8px; border: 1px solid currentColor; background: transparent; color: inherit; font: inherit; }
+.quiz .choice.right { border-color: #3fa37a; background: rgba(63, 163, 122, 0.18); }
+.quiz .choice.wrong { border-color: #c2563f; background: rgba(194, 86, 63, 0.18); }
+.quiz-result { margin: 8px 0 0; font-weight: 600; }
 .empty { text-align: center; color: var(--muted); padding: 40px 0; }
 .offline { color: var(--muted); font-size: 14px; padding: 12px 4px; border-top: 1px solid currentColor; margin-top: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }

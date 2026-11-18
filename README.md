@@ -38,8 +38,17 @@ feed, so a fresh deploy shows Wikipedia and language cards only.
 | `skill` | What your top job matches keep asking for that the resume doesn't show (the scorer's gaps), most asked first, with a lesson to watch in place | same as `job` |
 | `telemetry` | "Lab health": a firing or pending Grafana alert, else a trend (fullest disk, oldest backup, next cert expiry, warmest drive, LLM spend) | `GRAFANA_URL`, `GRAFANA_TOKEN` (Viewer service account), `GRAFANA_PROM_UID` |
 | `home` | Home Assistant: today's solar against yesterday and the house's use (from the Envoy's lifetime counters), the weather | `HA_URL`, `HA_TOKEN` |
+| `math` | A problem or puzzle to solve in the card: mental arithmetic, percentages, fractions, algebra, number theory, counting and probability, sequences, geometry, classic puzzles. Generated on the server (`app/mathgen.py`), so answers are exact; the page checks them (fractions fine), with a hint and a worked solution | none |
+| `recall` | Did it stick? A multiple-choice question about a card you opened a day or more ago, spaced out (1, 3, 7, 21, 60, 180 days; a miss starts it over) | the curator's LLM writes the questions |
 
-`job`, `skill`, `telemetry` and `home` appear at most once per feed load, and
+**Recall.** When you open or play a Wikipedia, news, home-lab, language or
+video card, its text is kept. Each curator pass turns cards opened six or
+more hours ago into one question each, from that card's text only. A
+question is due a day after you saw the card; answering right moves it to
+the next interval, wrong brings it back tomorrow. The card shows how many
+you've got right this month.
+
+`job`, `skill`, `telemetry`, `home` and `recall` appear at most once per feed load, and
 their titles never go to the curator or the weekly interest proposals (job
 text is scraped from the web; the others say nothing about your taste).
 
@@ -162,6 +171,7 @@ the `liessure-data` volume.
 - `GET /api/sources` — which kinds are configured, curator pool size
 - `POST /api/event` — `{kind, ref, action: open|play, title}`
 - `POST /api/curate[?kind=video]` — run a curation pass now
+- `POST /api/recall/{id}` — `{correct}`: next interval; `GET /api/recall/stats`
 - `POST /api/ideas` — `{text, about}`; `GET /api/ideas[?status=new]`;
   `POST /api/ideas/{id}/status` — `{status: new|planned|done|dropped}`
 - `GET /healthz`
