@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS recall (
     due REAL NOT NULL, created REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS recall_answers (ts REAL NOT NULL, recall_id INTEGER NOT NULL, correct INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS todo_estimates (  -- how long a to-do item takes, redone when its text changes
+    item_id INTEGER PRIMARY KEY, text_hash TEXT NOT NULL, minutes INTEGER NOT NULL,
+    label TEXT NOT NULL, assumption TEXT NOT NULL DEFAULT '', ts REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS rejected (
     kind TEXT NOT NULL, ref TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (kind, ref)
 );
@@ -148,6 +152,18 @@ class Store:
                 (time.time() - days * 86400,),
             ).fetchone()
         return {"answered_30d": row["n"], "correct_30d": row["ok"]}
+
+    # --- to-do estimates
+    def todo_estimates(self) -> dict[int, dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM todo_estimates").fetchall()
+        return {r["item_id"]: dict(r) for r in rows}
+
+    def put_todo_estimate(self, item_id: int, text_hash: str, minutes: int, label: str, assumption: str) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO todo_estimates (item_id, text_hash, minutes, label, assumption, ts) "
+                "VALUES (?, ?, ?, ?, ?, ?)", (item_id, text_hash, minutes, label, assumption, time.time()))
 
     # --- ideas: improvements jotted down in the app, to build later
     def add_idea(self, text: str, about: str = "") -> int:

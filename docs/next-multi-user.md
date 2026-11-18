@@ -59,7 +59,7 @@ fleet state needs an endpoint on the agent box, or the box pushing a small
 JSON to Liessure; never the box's credentials in Liessure. Answers stay in
 the console: a card links, it doesn't act.
 
-## Later: to-do cards
+## Done: to-do cards (2026-11-18, the `todo` kind)
 
 Cards for open items on axl's to-do list (the household `lists` service,
 lists.liess.tv; `lists_oauth` through Concierge), so a spare minute in the
@@ -90,7 +90,7 @@ is where a finished set or session gets logged. Rules:
 - Later: progress (streaks per routine, how many days this week), and
   prompting the next PT session when one is due.
 
-## Later: job cards
+## Done: job cards (2026-11-18, the `job` and `skill` kinds)
 
 Cards from the household jobs service (vfd000/jobs, jobs.liess.tv): its
 top-ranked new openings (`top_jobs`) and anything in the application

@@ -37,8 +37,9 @@ feed, so a fresh deploy shows Wikipedia and language cards only.
 | `job` | Jobs service: a new top match, or an application with a step due within two days. Weekends: due steps only | `JOBS_URL`, `JOBS_TOKEN` (its `MCP_API_TOKEN`), `JOBS_MIN_SCORE` (70) |
 | `skill` | What your top job matches keep asking for that the resume doesn't show (the scorer's gaps), most asked first, with a lesson to watch in place | same as `job` |
 | `telemetry` | "Lab health": a firing or pending Grafana alert, else a trend (fullest disk, oldest backup, next cert expiry, warmest drive, LLM spend) | `GRAFANA_URL`, `GRAFANA_TOKEN` (Viewer service account), `GRAFANA_PROM_UID` |
-| `home` | Home Assistant: today's solar against yesterday and the house's use (from the Envoy's lifetime counters), the weather | `HA_URL`, `HA_TOKEN` |
+| `home` | Home Assistant: solar today (or yesterday, before sunrise), this week, this month and this year, in kWh and dollars, from HA's long-term statistics; the weather | `HA_URL`, `HA_TOKEN`, `HOME_ENERGY_RATE` ($/kWh, 0.22: PSE's effective rate) |
 | `math` | A problem or puzzle to solve in the card: mental arithmetic, percentages, fractions, algebra, number theory, counting and probability, sequences, geometry, classic puzzles. Generated on the server (`app/mathgen.py`), so answers are exact; the page checks them (fractions fine), with a hint and a worked solution | none |
+| `todo` | An open item from the household To Do list with an LLM estimate of how long it takes and why; short ones by day, longer ones in the evening. Estimates are kept and redone only when an item changes; the card links, ticking off stays in the lists app | `LISTS_URL`, `LISTS_TOKEN` (the lists service's `MCP_API_TOKEN`), `TODO_LIST_ID` (6), the LLM |
 | `recall` | Did it stick? A multiple-choice question about a card you opened a day or more ago, spaced out (1, 3, 7, 21, 60, 180 days; a miss starts it over) | the curator's LLM writes the questions |
 
 **Recall.** When you open or play a Wikipedia, news, home-lab, language or

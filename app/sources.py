@@ -1357,6 +1357,62 @@ async def home(client: httpx.AsyncClient, s: Settings, rng: random.Random, now: 
     raise Unavailable(f"home insights failed: {last}")
 
 
+# --------------------------------------------------------------------- todo
+# Open items on the household To Do list (vfd000/lists), each with an LLM
+# estimate of how long it takes. Cards link; ticking off stays in the lists app.
+
+_todo_cache = _TTLCache(300)
+
+
+async def todo_items(client: httpx.AsyncClient, s: Settings) -> list[dict[str, Any]]:
+    hit = _todo_cache.get("items")
+    if hit is None:
+        r = await client.get(f"{s.lists.url}/lists/{s.todo_list_id}", params={"include_checked": "false"},
+                             headers={"Authorization": f"Bearer {s.lists_token}"})
+        r.raise_for_status()
+        hit = [i for i in (r.json().get("items") or []) if not i.get("checked") and (i.get("text") or "").strip()]
+        _todo_cache.put("items", hit)
+    return hit
+
+
+def todo_text_hash(item: dict[str, Any]) -> str:
+    return hashlib.sha1(f"{item.get('text', '')}\n{item.get('notes') or ''}".encode()).hexdigest()[:16]
+
+
+def todo_fits(minutes: int, hour: int) -> float:
+    """How well an item fits the moment: short ones any time, long ones in the evening, nothing big late."""
+    if hour >= 22 or hour < 6:
+        return 1.0 if minutes <= 15 else 0.1
+    if 18 <= hour < 22:
+        return 1.0 if minutes > 15 else 0.6
+    return 1.0 if minutes <= 15 else (0.4 if minutes <= 60 else 0.15)
+
+
+def todo_card(s: Settings, item: dict[str, Any], est: dict[str, Any]) -> Card:
+    actions = []
+    if (item.get("link_url") or "").startswith(("https://", "http://")):
+        actions.append({"label": "Open link", "url": item["link_url"]})
+    actions.append({"label": "Search", "url": "https://duckduckgo.com/?" + urlencode({"q": item["text"]})})
+    due = (item.get("due_at") or "")[:10]
+    blurb = " ".join(x for x in (est.get("assumption") or "", item.get("notes") or "",
+                                 f"Due {due}." if due else "") if x)
+    return Card(
+        kind="todo",
+        label=f"To do · {est['label']}",
+        title=item["text"],
+        subtitle=f"About {est['label']}",
+        blurb=_clip(blurb, 400),
+        url=f"{s.lists.link_base}/",
+        actions=actions,
+        ref=f"todo:{item['id']}",
+    )
+
+
+async def todo(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    """Served by main.py, which holds the estimates; never called directly."""
+    raise Unavailable("to-do cards come from main.py")
+
+
 # --------------------------------------------------------------------- math
 
 
@@ -1411,6 +1467,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "home": home,
     "math": math,
     "recall": recall,
+    "todo": todo,
 }
 
 
@@ -1432,4 +1489,5 @@ def configured(s: Settings) -> dict[str, bool]:
         "home": bool(s.ha.url and s.ha_token),
         "math": True,
         "recall": bool(s.llm_url and s.llm_key),  # the curator writes the questions
+        "todo": bool(s.lists.url and s.lists_token and s.llm_url and s.llm_key),
     }

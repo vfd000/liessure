@@ -41,17 +41,18 @@ DEFAULT_WEIGHTS = {
     "home": 1,
     "math": 2,
     "recall": 2,
+    "todo": 2,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
 RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video"})
 
 # Kinds whose titles never go to the LLM as evidence of what you like.
-UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall"})
+UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo"})
 
 KINDS = tuple(DEFAULT_WEIGHTS)
 
@@ -247,6 +248,11 @@ class Settings:
     # Home Assistant (energy from the Enphase Envoy, the weather).
     ha: Service = field(default_factory=Service)
     ha_token: str = ""
+    # The household lists service (vfd000/lists): LISTS_TOKEN is its MCP_API_TOKEN. Read only here.
+    lists: Service = field(default_factory=Service)
+    lists_token: str = ""
+    todo_list_id: int = 6
+
     # What a kWh is worth: PSE's effective rate, what solar saves (or earns back) per kWh.
     home_energy_rate: float = 0.22
 
@@ -323,6 +329,9 @@ class Settings:
             ha=svc("HA"),
             ha_token=_env("HA_TOKEN"),
             home_energy_rate=float(_env("HOME_ENERGY_RATE", "0.22")),
+            lists=svc("LISTS"),
+            lists_token=_env("LISTS_TOKEN"),
+            todo_list_id=int(_env("TODO_LIST_ID", "6")),
         )
 
 
