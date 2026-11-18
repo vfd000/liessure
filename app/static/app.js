@@ -28,6 +28,8 @@ const UI = {
     "cards": "tarjetas", "due": "pendientes", "Added.": "Añadida.", "Importing…": "Importando…",
     "Imported": "Importadas", "Couldn't import that": "No se pudo importar",
     "Couldn't tick it off the To Do list": "No se pudo marcar en la lista",
+    "To do": "Pendiente", "Study further": "Estudiar más", "Implement": "Implementar",
+    "On the To Do list": "En la lista", "Couldn't add it to the To Do list": "No se pudo añadir a la lista",
     "Map": "Mapa", "Hide map": "Ocultar mapa", "Open in Maps": "Abrir en Mapas",
     "approximate route (straight lines between places)": "ruta aproximada (líneas rectas entre lugares)",
     "Search cards you've seen": "Buscar tarjetas que ya viste", "Later": "Después", "Done": "Hecho",
@@ -243,6 +245,31 @@ function renderCard(c) {
       drawRoute(c, g, box, f);
     };
     actions.append(mapBtn);
+  }
+  if (CAN_TODO && c.kind !== "todo" && c.title) {
+    // Onto the To Do list: to read up on it, or to build it.
+    const td = el("button", "", "＋ " + t("To do"));
+    td.onclick = () => {
+      const pick = el("div", "quiz-row");
+      const done = (msg) => { pick.remove(); td.textContent = msg; };
+      for (const [why, label] of [["study", t("Study further")], ["implement", t("Implement")]]) {
+        const b = el("button", "chip", label);
+        b.onclick = async () => {
+          pick.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+          try {
+            const r = await fetch("/api/todo/from-card", { method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({ card: { title: c.title, subtitle: c.subtitle, blurb: c.blurb, url: c.url }, why }) });
+            if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+            done("✓ " + t("On the To Do list"));
+            td.disabled = true;
+          } catch (e) { done("＋ " + t("To do")); alert(t("Couldn't add it to the To Do list") + ": " + e.message); }
+        };
+        pick.append(b);
+      }
+      td.after(pick);
+      td.onclick = null;
+    };
+    actions.append(td);
   }
   if (MAKES_FLASHCARDS.has(c.kind)) {
     const mk = el("button", "", t("Make flashcards"));
@@ -1006,7 +1033,8 @@ new IntersectionObserver((entries) => {
   if (entries.some((e) => e.isIntersecting)) load();
 }, { rootMargin: "600px" }).observe(sentinel);
 
-const whoami = fetch("/api/me").then((r) => r.json()).then((me) => { UI_LANG = me.lang || "en"; return me; })
+let CAN_TODO = false; // the owner, with the lists service: cards can go onto the To Do list
+const whoami = fetch("/api/me").then((r) => r.json()).then((me) => { UI_LANG = me.lang || "en"; CAN_TODO = !!me.todo; return me; })
   .catch(() => ({}));
 whoami.then(() => fetch("/api/sources")).then((r) => r.json()).then(({ language, sources }) => {
   configured = Object.keys(sources).filter((k) => sources[k].configured && sources[k].weight > 0);
