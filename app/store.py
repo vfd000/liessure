@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS math_help (       -- help used on a math problem: hin
 );
 CREATE TABLE IF NOT EXISTS history (         -- every card the feed showed someone, to find it again
     user TEXT NOT NULL, key TEXT NOT NULL, ts REAL NOT NULL, card TEXT NOT NULL, text TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT '',            -- '' | 'done' (swiped away, kept in a list) | 'later' (comes back)
+    state_ts REAL NOT NULL DEFAULT 0, due REAL NOT NULL DEFAULT 0, box INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user, key)
 );
 CREATE INDEX IF NOT EXISTS history_user_ts ON history (user, ts);
@@ -108,6 +110,11 @@ class Store:
         """Databases from before multi-user: add the user column (their rows are the owner's)."""
         def cols(table: str) -> set[str]:
             return {r["name"] for r in self._db.execute(f"PRAGMA table_info({table})").fetchall()}
+        hist = cols("history")
+        for col, decl in (("state", "TEXT NOT NULL DEFAULT ''"), ("state_ts", "REAL NOT NULL DEFAULT 0"),
+                          ("due", "REAL NOT NULL DEFAULT 0"), ("box", "INTEGER NOT NULL DEFAULT 0")):
+            if col not in hist:
+                self._db.execute(f"ALTER TABLE history ADD COLUMN {col} {decl}")
         for table in ("events", "ideas", "recall", "recall_answers", "math_attempts"):
             if "user" not in cols(table):
                 self._db.execute(f"ALTER TABLE {table} ADD COLUMN user TEXT NOT NULL DEFAULT 'owner'")
@@ -289,13 +296,17 @@ class Store:
                 "VALUES (?, ?, ?, ?, ?, ?)", (item_id, text_hash, minutes, label, assumption, time.time()))
 
     # --- history: cards shown, searchable
-    HISTORY_MAX = 1000
+    HISTORY_MAX = 100_000  # effectively everything: search should find very old cards
+
+    @staticmethod
+    def card_key(c: dict[str, Any]) -> str:
+        return f"{c.get('kind')}:{c.get('ref') or c.get('url')}"[:300]
 
     def remember_shown(self, cards: list[dict[str, Any]], user: str = "owner") -> None:
         now = time.time()
         rows = []
         for i, c in enumerate(cards):
-            key = f"{c.get('kind')}:{c.get('ref') or c.get('url')}"[:300]
+            key = self.card_key(c)
             text = " ".join(str(c.get(k) or "") for k in ("title", "subtitle", "label", "blurb")).casefold()
             rows.append((user, key, now + i / 1000, json.dumps(c), text[:3000]))
         with self._lock, self._db:
@@ -304,8 +315,49 @@ class Store:
                 "ON CONFLICT (user, key) DO UPDATE SET ts = excluded.ts, card = excluded.card, text = excluded.text",
                 rows)
             self._db.execute(
-                "DELETE FROM history WHERE user = ? AND ts < (SELECT ts FROM history WHERE user = ? "
+                "DELETE FROM history WHERE user = ? AND state = '' AND ts < (SELECT ts FROM history WHERE user = ? "
                 "ORDER BY ts DESC LIMIT 1 OFFSET ?)", (user, user, self.HISTORY_MAX - 1))
+
+    # Swiped: 'done' leaves the feed for a list; 'later' is a list too and comes back on a spaced schedule.
+    LATER_DAYS = (1, 3, 7, 14, 30, 60)
+
+    def set_state(self, card: dict[str, Any], state: str, user: str = "owner") -> None:
+        now = time.time()
+        key = self.card_key(card)
+        text = " ".join(str(card.get(k) or "") for k in ("title", "subtitle", "label", "blurb")).casefold()
+        due = now + self.LATER_DAYS[0] * 86400 if state == "later" else 0
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO history (user, key, ts, card, text, state, state_ts, due, box) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0) "
+                "ON CONFLICT (user, key) DO UPDATE SET state = excluded.state, state_ts = excluded.state_ts, "
+                "due = excluded.due, box = 0",
+                (user, key, now, json.dumps(card), text[:3000], state, now, due))
+
+    def state_list(self, state: str, user: str = "owner", limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT card, due FROM history WHERE user = ? AND state = ? ORDER BY state_ts DESC LIMIT ?",
+                (user, state, limit)).fetchall()
+        return [{**json.loads(r["card"]), "due": r["due"]} for r in rows]
+
+    def done_keys(self, user: str = "owner") -> set[str]:
+        with self._lock:
+            rows = self._db.execute("SELECT key FROM history WHERE user = ? AND state = 'done'", (user,)).fetchall()
+        return {r["key"] for r in rows}
+
+    def due_later(self, user: str = "owner") -> dict[str, Any] | None:
+        """The most overdue 'later' card, rescheduled further out (it stays on the Later list)."""
+        now = time.time()
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT key, card, box FROM history WHERE user = ? AND state = 'later' AND due <= ? ORDER BY due LIMIT 1",
+                (user, now)).fetchone()
+            if not row:
+                return None
+            box = min(row["box"] + 1, len(self.LATER_DAYS) - 1)
+            self._db.execute("UPDATE history SET box = ?, due = ? WHERE user = ? AND key = ?",
+                             (box, now + self.LATER_DAYS[box] * 86400, user, row["key"]))
+        return json.loads(row["card"])
 
     def search_history(self, q: str, user: str = "owner", limit: int = 40) -> list[dict[str, Any]]:
         """Cards shown to this person, newest first, whose text has every word of q."""
