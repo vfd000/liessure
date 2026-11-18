@@ -25,6 +25,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
+from . import mathgen
 from .config import Settings, language_queries
 
 
@@ -53,6 +54,9 @@ class Card:
     why: str = ""
     # The Android app opens `url` inside itself (Jellyfin's web UI: its phone app takes no deep links).
     open_in_app: bool = False
+    # Something to answer in place. Typed: {"answer", "tolerance", "hint", "solution"};
+    # multiple choice: {"id", "choices", "answer" (index), "solution"}.
+    quiz: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1173,6 +1177,41 @@ async def home(client: httpx.AsyncClient, s: Settings, rng: random.Random, now: 
     raise Unavailable(f"home insights failed: {last}")
 
 
+# --------------------------------------------------------------------- math
+
+
+async def math(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    """A problem or puzzle to solve in place; generated here, so the answer is exact."""
+    p = mathgen.problem(rng)
+    return Card(
+        kind="math",
+        label=f"Math · {p.topic}",
+        title=p.question,
+        subtitle=f"Answer {p.answer_note}" if p.answer_note else "",
+        url=f"https://{s.wikipedia_lang}.wikipedia.org/wiki/{quote(p.wiki.replace(' ', '_'))}",
+        quiz={"answer": p.answer, "tolerance": p.tolerance, "hint": p.hint, "solution": p.solution},
+        ref="math:" + hashlib.sha1(p.question.encode()).hexdigest()[:16],
+    )
+
+
+async def recall(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    """Served by main.py from the store (questions about cards you opened); never called directly."""
+    raise Unavailable("recall cards come from the store")
+
+
+def recall_card(row: dict[str, Any], now: float | None = None) -> Card:
+    ago = max(1, round(((now or time.time()) - (row.get("seen_ts") or row["created"])) / 86400))
+    return Card(
+        kind="recall",
+        label=f"Recall · from {row['kind']} you opened {ago} day{'s' if ago != 1 else ''} ago",
+        title=row["question"],
+        subtitle=row.get("card_title") or "",
+        url=row.get("card_url") or "",
+        quiz={"id": row["id"], "choices": row["choices"], "answer": row["answer"], "solution": row["explain"]},
+        ref=f"recall:{row['id']}",
+    )
+
+
 # ----------------------------------------------------------------- registry
 
 SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaitable[Card]]] = {
@@ -1190,6 +1229,8 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "skill": skill,
     "telemetry": telemetry,
     "home": home,
+    "math": math,
+    "recall": recall,
 }
 
 
@@ -1209,4 +1250,6 @@ def configured(s: Settings) -> dict[str, bool]:
         "skill": bool(s.jobs.url and s.jobs_token),
         "telemetry": bool(s.grafana.url and s.grafana_token),
         "home": bool(s.ha.url and s.ha_token),
+        "math": True,
+        "recall": bool(s.llm_url and s.llm_key),  # the curator writes the questions
     }

@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import curator, profile, sources
-from .config import KINDS, MAX_PER_LOAD, Settings
+from .config import KINDS, MAX_PER_LOAD, RECALL_KINDS, Settings
 from .store import Store
 
 log = logging.getLogger("liessure")
@@ -52,6 +52,14 @@ class Event(BaseModel):
     action: str = Field(pattern="^(open|play)$")
     ref: str = Field("", max_length=128)
     title: str = Field("", max_length=300)
+    # What the card said, kept for recall questions (RECALL_KINDS only).
+    subtitle: str = Field("", max_length=300)
+    text: str = Field("", max_length=4000)
+    url: str = Field("", max_length=1000)
+
+
+class RecallAnswer(BaseModel):
+    correct: bool
 
 
 def create_app(
@@ -88,6 +96,9 @@ def create_app(
     app.state.profiles = profiles
 
     async def one(client: httpx.AsyncClient, kind: str, rng: random.Random) -> dict | None:
+        if kind == "recall":
+            row = store.due_recall()
+            return sources.recall_card(row).to_dict() if row else None
         # Mostly the curated pool; a share of uncurated cards keeps some surprise in it.
         if settings.curator_enabled and rng.random() < settings.curator_share:
             pick = store.take(kind, rng.random())
@@ -130,7 +141,21 @@ def create_app(
         if e.kind not in KINDS:
             raise HTTPException(400, "unknown kind")
         store.record(e.kind, e.ref, e.action, e.title)
+        if e.kind in RECALL_KINDS and e.ref and e.title and e.url.startswith("https://"):
+            store.remember_card(e.kind, e.ref, e.title, e.subtitle, e.text, e.url)
         return Response(status_code=204)
+
+    @app.post("/api/recall/{recall_id}")
+    async def answer_recall(recall_id: int, a: RecallAnswer):
+        """You answered a recall question: right moves it to a longer interval, wrong starts it over."""
+        out = store.answer_recall(recall_id, a.correct)
+        if out is None:
+            raise HTTPException(404, "no such question")
+        return out
+
+    @app.get("/api/recall/stats")
+    async def recall_stats():
+        return store.recall_stats()
 
     @app.post("/api/ideas", status_code=201)
     async def add_idea(i: Idea):
