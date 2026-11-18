@@ -87,6 +87,51 @@ function renderCard(c) {
   if (c.quiz && (c.quiz.choices || c.quiz.answer !== undefined)) body.append(renderQuiz(c));
 
   const actions = el("div", "actions");
+  if ((c.details && c.details.length) || (c.photo && c.photo.id)) {
+    const more = el("div", "details");
+    more.hidden = true;
+    if (c.details && c.details.length) {
+      const dl = el("dl");
+      for (const d of c.details) {
+        if (d.url) continue;
+        dl.append(el("dt", "", d.label), el("dd", "", d.value));
+      }
+      more.append(dl);
+      const links = el("div", "actions");
+      for (const d of c.details.filter((x) => x.url)) {
+        const l = el("a", "", d.label);
+        l.href = d.url;
+        l.onclick = (e) => { e.preventDefault(); openUrl(d.url); };
+        links.append(l);
+      }
+      more.append(links);
+    }
+    if (c.photo && c.photo.id) {
+      const found = el("p", "why");
+      const ident = el("button", "", "Identify");
+      ident.onclick = async () => {
+        ident.disabled = true;
+        found.textContent = "Looking at it…";
+        try {
+          const r = await fetch(`/api/photo/${c.photo.id}/identify`, { method: "POST" });
+          if (!r.ok) throw new Error(r.status);
+          found.textContent = (await r.json()).text;
+        } catch {
+          found.textContent = "Couldn't identify it right now.";
+          ident.disabled = false;
+        }
+      };
+      const claude = el("button", "", "Ask Claude");
+      claude.onclick = () => askClaude(c);
+      const row = el("div", "actions");
+      row.append(ident, claude);
+      more.append(row, found);
+    }
+    const toggle = el("button", "", "Details");
+    toggle.onclick = () => { more.hidden = !more.hidden; toggle.textContent = more.hidden ? "Details" : "Hide details"; };
+    actions.append(toggle);
+    body.append(more);
+  }
   if (c.embed && c.embed.src) {
     const play = el("button", "primary", "▶ " + (c.embed.label || "Play here"));
     play.onclick = () => { playInline(card, c.embed); play.remove(); report(c, "play"); };
@@ -145,6 +190,34 @@ function speak({ text, lang, fallback }) {
   u.rate = 0.85;
   synth.cancel();
   synth.speak(u);
+}
+
+// Hand a photo to Claude: the Claude app (Android share), the share sheet (iPhone, other
+// browsers), or a text-only new chat when sharing a file isn't possible.
+async function askClaude(c) {
+  const p = c.photo || {};
+  const where = [p.place, p.lat != null ? `${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}` : ""].filter(Boolean).join(" · ");
+  const text = `What's in this photo? I took it${p.when ? " on " + p.when : ""}${where ? " at " + where : ""}. ` +
+    "Identify what you can (landmarks, plants, animals, the kind of place) and tell me about the area.";
+  try {
+    const blob = await (await fetch(c.image)).blob();
+    if (android && android.shareImage) {
+      const b64 = await new Promise((ok, bad) => {
+        const r = new FileReader();
+        r.onload = () => ok(String(r.result).split(",")[1]);
+        r.onerror = bad;
+        r.readAsDataURL(blob);
+      });
+      return android.shareImage(b64, blob.type || "image/jpeg", text);
+    }
+    const file = new File([blob], "photo.jpg", { type: blob.type || "image/jpeg" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      return await navigator.share({ files: [file], text });
+    }
+  } catch (e) {
+    if (e && e.name === "AbortError") return; // the share sheet was dismissed
+  }
+  openUrl("https://claude.ai/new?" + new URLSearchParams({ q: text }));
 }
 
 // A finger-and-mouse scratch pad, for the working you'd do on paper.

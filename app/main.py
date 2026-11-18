@@ -197,6 +197,19 @@ def create_app(
         store.record_math(a.ref, a.topic, a.correct, a.tries, a.revealed)
         return store.math_stats()
 
+    @app.post("/api/photo/{asset_id}/identify")
+    async def identify(request: Request, asset_id: str):
+        """What's in a photo: the household vision model, with the photo's date and place as hints."""
+        if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", asset_id):
+            raise HTTPException(400, "not an asset id")
+        if not (settings.curator_enabled and settings.immich.url and settings.immich_api_key):
+            raise HTTPException(409, "needs the LLM and Immich")
+        try:
+            text = await curator.identify_photo(request.app.state.client, settings, asset_id)
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"couldn't look at it: {type(e).__name__}")
+        return {"text": text[:2000]}
+
     @app.post("/api/math/help")
     async def math_help(request: Request, h: MathHelp):
         """Step-by-step help with a wrong answer: the likely mistake, then the way through."""

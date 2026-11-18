@@ -1029,3 +1029,38 @@ def test_reading_in_the_feed_counts(client):
     assert client.post("/api/event", json=ev).status_code == 204
     assert client.app.state.store.cards_to_ask(min_age_hours=0)[0]["ref"] == "X"
 
+
+def test_photo_details_and_identify(monkeypatch):
+    asset = {"id": "p1", "localDateTime": "2024-05-01T10:00:00", "exifInfo": {
+        "city": "Kyoto", "country": "Japan", "latitude": 35.0116, "longitude": 135.7681, "make": "Google",
+        "model": "Pixel 8", "fNumber": 1.7, "exposureTime": "1/120", "iso": 50, "focalLength": 6.9,
+        "exifImageWidth": 4080, "exifImageHeight": 3072}}
+    d = {x["label"]: x.get("value") or x.get("url") for x in sources.photo_details(asset)}
+    assert d["Taken"] == "Wed 1 May 2024, 10:00" and d["Where"] == "Kyoto, Japan"
+    assert d["Camera"] == "Google Pixel 8" and d["Exposure"] == "f/1.7 · 1/120 s · ISO 50 · 6.9 mm"
+    assert d["Map"].startswith("https://www.openstreetmap.org/?mlat=35.01160")
+    assert d["What's nearby"].endswith("#/coord/35.01160,135.76810")
+    card = sources._immich_card(full_settings(), asset, "")
+    assert card.photo == {"id": "p1", "when": "2024-05-01", "place": "Kyoto, Japan", "lat": 35.0116, "lon": 135.7681}
+
+    def backend(request):
+        if request.url.host == "im.test" and request.url.path == "/api/assets/abcdef12":
+            return httpx.Response(200, json={**asset, "id": "abcdef12"})
+        if request.url.host == "im.test" and request.url.path.endswith("/thumbnail"):
+            return httpx.Response(200, content=b"\xff\xd8x", headers={"content-type": "image/jpeg"})
+        return fake_backend(request)
+    seen = {}
+
+    async def ask(client, s, content, system=None):
+        seen["content"], seen["system"] = content, system
+        return "A torii gate at Fushimi Inari (fairly sure)."
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    curator._identified.clear()
+    with make_client(full_settings(llm_url="http://llm.test", llm_key="k"), handler=backend) as c:
+        r = c.post("/api/photo/abcdef12/identify")
+        assert r.status_code == 200 and r.json()["text"].startswith("A torii gate")
+        assert c.post("/api/photo/..%2Fx/identify").status_code in (400, 404, 405)  # never reaches Immich
+    assert "Kyoto, Japan" in seen["content"][0]["text"] and seen["content"][1]["image_url"]["url"].startswith("data:image/jpeg")
+    with make_client(full_settings()) as c:
+        assert c.post("/api/photo/abcdef12/identify").status_code == 409
+
