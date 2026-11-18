@@ -611,6 +611,22 @@ def code_for_label(s: Settings, label: str) -> str:
     return ""
 
 
+# --------------------------------------------------------------------- math
+
+MATH_HELP_SYSTEM = """You are a patient math tutor. A learner got a problem wrong. Show them how to fix \
+it: point out the most likely mistake behind their answer, then walk through the solution in short \
+numbered steps (at most 6), plain text, no LaTeX, using only the worked solution given. Keep it under \
+150 words. Reply with the explanation only."""
+
+
+async def math_help(client: httpx.AsyncClient, s: Settings, question: str, answer: str, theirs: str,
+                    solution: str, ask=None) -> str:
+    ask = ask or ask_llm
+    prompt = (f"Problem: {question}\nCorrect answer: {answer}\nWorked solution: {solution}\n"
+              f"The learner answered: {theirs}")
+    return (await ask(client, s, prompt, system=MATH_HELP_SYSTEM)).strip()
+
+
 # --------------------------------------------------------------------- todo
 
 TODO_SYSTEM = """You estimate how long to-do items take one person, start to finish, so they can \
