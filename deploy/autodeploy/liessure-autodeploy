@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Runs in CT 163 from liessure-autodeploy.timer: deploys each new build of main.
+#
+# .github/workflows/image.yml tags every build of main as
+# ghcr.io/vfd000/liessure:latest (public package, no credentials). When that tag
+# points at a new digest, pin the digest in /opt/liessure/.env, recreate the
+# container, and wait for /healthz. If it isn't healthy within 60 s, put the
+# previous digest back and remember the bad one so it isn't retried.
+#
+# Only the image changes here. docker-compose.yml changes still go out with
+# deploy/build-release-plan.sh (an approved plan).
+set -euo pipefail
+
+APP=/opt/liessure
+REPO=ghcr.io/vfd000/liessure
+STATE=/var/lib/liessure-autodeploy
+CONTAINER=liessure-liessure-1
+
+mkdir -p "$STATE"
+exec 9>"$STATE/lock"
+flock -n 9 || exit 0
+cd "$APP"
+
+docker pull -q "$REPO:latest" >/dev/null
+digest="$(docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$REPO:latest" | grep -m1 "^$REPO@sha256:" || true)"
+[[ "$digest" =~ ^ghcr\.io/vfd000/liessure@sha256:[0-9a-f]{64}$ ]] || { echo "no digest for $REPO:latest" >&2; exit 1; }
+
+prev="$(grep -m1 '^LIESSURE_IMAGE=' .env | cut -d= -f2- || true)"
+[[ "$digest" != "$prev" ]] || exit 0
+[[ "$(cat "$STATE/failed" 2>/dev/null)" != "$digest" ]] || exit 0   # known bad: wait for the next build
+
+set_image() { sed -i '/^LIESSURE_IMAGE=/d' .env && printf 'LIESSURE_IMAGE=%s\n' "$1" >> .env; }
+healthy() {
+  for _ in $(seq 1 30); do
+    if curl -fsS -m 3 http://127.0.0.1:8000/healthz >/dev/null 2>&1 \
+       && [[ "$(docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null)" == "$1" ]]; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+rev="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$REPO:latest" 2>/dev/null || true)"
+echo "deploying ${rev:0:7} $digest (was ${prev:-none})"
+set_image "$digest"
+docker compose up -d --no-build 2>&1 | tail -3 || true   # the health check decides
+if healthy "$digest"; then
+  rm -f "$STATE/failed"
+  printf '%s %s %s\n' "$(date -Is)" "${rev:0:7}" "$digest" >> "$STATE/deployed"
+  docker image prune -af --filter until=168h >/dev/null 2>&1 || true
+  echo "deployed ${rev:0:7}"
+  exit 0
+fi
+
+echo "not healthy within 60 s; rolling back to ${prev:-nothing}" >&2
+docker compose logs --tail=40 >&2 || true
+echo "$digest" > "$STATE/failed"
+if [[ -n "$prev" ]]; then
+  set_image "$prev"
+  docker compose up -d --no-build 2>&1 | tail -3 || true
+fi
+exit 1

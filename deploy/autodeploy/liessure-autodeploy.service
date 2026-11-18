@@ -1,0 +1,9 @@
+[Unit]
+Description=Deploy the newest Liessure build of main (ghcr.io/vfd000/liessure:latest)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/liessure-autodeploy
+TimeoutStartSec=10min

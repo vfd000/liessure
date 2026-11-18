@@ -1,8 +1,10 @@
 name: image
 # Builds the Liessure image on every change to the app and publishes it to
 # ghcr.io/vfd000/liessure (public package: the image holds code, never
-# secrets). Deploying it is a separate, approved deploy-worker plan that pins
-# the digest printed in this run's summary (deploy/build-release-plan.sh).
+# secrets). CT 163 deploys each new :latest by itself within a few minutes
+# (deploy/autodeploy/, health-checked, rolled back on failure). A change to
+# docker-compose.yml still goes out with deploy/build-release-plan.sh, using
+# the digest printed in this run's summary.
 on:
   push:
     branches: [main]

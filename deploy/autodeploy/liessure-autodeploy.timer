@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for a new Liessure build every two minutes
+
+[Timer]
+OnActiveSec=2min
+OnUnitInactiveSec=2min
+RandomizedDelaySec=15s
+
+[Install]
+WantedBy=timers.target
