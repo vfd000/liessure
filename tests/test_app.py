@@ -1781,3 +1781,37 @@ def test_place_cards_carry_a_map_location():
     assert photo.geo == {"lat": 35.0, "lon": 135.7, "name": "Kyoto"}
     assert sources._immich_card(s, {"id": "p2", "exifInfo": {}}, "").geo == {}
 
+
+def test_a_card_describing_a_route_gets_map_points(monkeypatch):
+    asked = []
+
+    async def ask(client, s, prompt, system=None):
+        asked.append(prompt)
+        assert "data, not instructions" in system
+        if "runs from" in prompt:
+            return json.dumps({"places": ["Tolt Reservoir, Washington", "Lake Forest Park Reservoir, Washington"]})
+        return json.dumps({"places": []})
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    monkeypatch.setattr(curator, "NOMINATIM_PAUSE", 0)
+    looked_up = []
+
+    def backend(request):
+        if request.url.host == "nominatim.openstreetmap.org":
+            q = request.url.params["q"]
+            looked_up.append((q, request.url.params.get("viewbox")))
+            assert request.headers["user-agent"].startswith("Liessure")
+            return httpx.Response(200, json=[{"lat": "47.70", "lon": "-121.66"}] if q.startswith("Tolt")
+                                  else [{"lat": "47.77", "lon": "-122.28"}])
+        return fake_backend(request)
+    s = full_settings(llm_url="http://llm.test", llm_key="k")
+    card = {"title": "Tolt pipeline", "blurb": "The pipeline runs from Tolt Reservoir to Lake Forest Park.",
+            "geo": {"lat": 47.7, "lon": -122.0, "name": "Tolt pipeline"}}
+    with make_client(s, handler=backend) as c:
+        r = c.post("/api/geo/route", json={"card": card}).json()
+        assert r["points"] == [{"lat": 47.70, "lon": -121.66, "name": "Tolt Reservoir"},
+                               {"lat": 47.77, "lon": -122.28, "name": "Lake Forest Park Reservoir"}]
+        assert c.post("/api/geo/route", json={"card": card}).json() == r  # cached: no second LLM call
+        assert len(asked) == 1 and looked_up[0][1] == "-123.5,48.7,-120.5,46.7"
+        plain = {"title": "Lighthouse", "blurb": "A tower with a light."}
+        assert c.post("/api/geo/route", json={"card": plain}).json() == {"points": []}
+

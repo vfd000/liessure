@@ -29,6 +29,7 @@ const UI = {
     "Imported": "Importadas", "Couldn't import that": "No se pudo importar",
     "Couldn't tick it off the To Do list": "No se pudo marcar en la lista",
     "Map": "Mapa", "Hide map": "Ocultar mapa", "Open in Maps": "Abrir en Mapas",
+    "approximate route (straight lines between places)": "ruta aproximada (líneas rectas entre lugares)",
     "Search cards you've seen": "Buscar tarjetas que ya viste", "Later": "Después", "Done": "Hecho",
     "Done ✓": "Hecho ✓", "Later ↻": "Después ↻", "Back again": "De nuevo", "empty": "vacío",
     "Back to the feed": "Volver al feed", "Remove from Later": "Quitar de Después", "Found": "Encontradas",
@@ -238,6 +239,8 @@ function renderCard(c) {
       shown.append(f, out);
       body.insertBefore(shown, actions);
       mapBtn.textContent = t("Hide map");
+      const box = shown;
+      drawRoute(c, g, box, f);
     };
     actions.append(mapBtn);
   }
@@ -305,6 +308,54 @@ function renderCard(c) {
 
   if (c.image) card.querySelector(".media").onclick = () => { report(c, "open"); openUrl(c.url, c.open_in_app); };
   return card;
+}
+
+// ------------------------------------------------------------------ map routes
+// "The pipeline runs from A to B": the server names and finds the places; Leaflet draws a dashed line
+// between them (straight segments, so approximate). Falls back to the plain pin when there's no route.
+let leaflet = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (leaflet) return leaflet;
+  const base = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/";
+  const css = document.createElement("link");
+  css.rel = "stylesheet";
+  css.href = base + "leaflet.min.css";
+  document.head.append(css);
+  leaflet = new Promise((ok, fail) => {
+    const s = document.createElement("script");
+    s.src = base + "leaflet.min.js";
+    s.onload = () => ok(window.L);
+    s.onerror = () => { leaflet = null; fail(new Error("leaflet")); };
+    document.head.append(s);
+  });
+  return leaflet;
+}
+
+async function drawRoute(c, g, box, pinFrame) {
+  if (!c.blurb && !c.subtitle) return;
+  let points = [];
+  try {
+    const r = await fetch("/api/geo/route", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ card: { title: c.title, subtitle: c.subtitle, blurb: c.blurb, geo: c.geo } }) });
+    points = (await r.json()).points || [];
+  } catch { return; }
+  if (points.length < 2 || !box.isConnected) return;
+  let L;
+  try { L = await loadLeaflet(); } catch { return; }
+  if (!box.isConnected) return;
+  const div = el("div", "route-map");
+  pinFrame.replaceWith(div);
+  const m = L.map(div, { scrollWheelZoom: false });
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(m);
+  const ll = points.map((p) => [p.lat, p.lon]);
+  L.polyline(ll, { color: "#d33", weight: 4, dashArray: "8 8" }).addTo(m);
+  points.forEach((p, i) => L.circleMarker([p.lat, p.lon], { radius: i === 0 || i === points.length - 1 ? 7 : 4,
+    color: "#d33", fillOpacity: 1 }).bindTooltip(p.name).addTo(m));
+  if (g) L.marker([g.lat, g.lon]).bindTooltip(g.name || c.title).addTo(m);
+  m.fitBounds(L.latLngBounds(g ? ll.concat([[g.lat, g.lon]]) : ll), { padding: [20, 20] });
+  div.after(el("p", "why", `${points.map((p) => p.name).join(" → ")} · ${t("approximate route (straight lines between places)")}`));
 }
 
 // ------------------------------------------------------------------ flashcards
