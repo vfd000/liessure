@@ -73,6 +73,9 @@ writing &amp; more.
 </pre></body></html>"""
 
 
+KQUIZ_JSON = '''{"results": {"bindings": [{"p": {"value": "http://www.wikidata.org/entity/Q1"}, "name": {"value": "Actor 1"}, "ko": {"value": "배우1"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a1.jpg"}, "dob": {"value": "1971-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581097"}}, {"p": {"value": "http://www.wikidata.org/entity/Q2"}, "name": {"value": "Actor 2"}, "ko": {"value": "배우2"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a2.jpg"}, "dob": {"value": "1972-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581072"}}, {"p": {"value": "http://www.wikidata.org/entity/Q3"}, "name": {"value": "Actor 3"}, "ko": {"value": "배우3"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a3.jpg"}, "dob": {"value": "1973-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581097"}}, {"p": {"value": "http://www.wikidata.org/entity/Q4"}, "name": {"value": "Actor 4"}, "ko": {"value": "배우4"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a4.jpg"}, "dob": {"value": "1974-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581072"}}, {"p": {"value": "http://www.wikidata.org/entity/Q5"}, "name": {"value": "Actor 5"}, "ko": {"value": "배우5"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a5.jpg"}, "dob": {"value": "1975-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581097"}}, {"p": {"value": "http://www.wikidata.org/entity/Q6"}, "name": {"value": "Actor 6"}, "ko": {"value": "배우6"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a6.jpg"}, "dob": {"value": "1976-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581072"}}, {"p": {"value": "http://www.wikidata.org/entity/Q7"}, "name": {"value": "Actor 7"}, "ko": {"value": "배우7"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a7.jpg"}, "dob": {"value": "1977-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581097"}}, {"p": {"value": "http://www.wikidata.org/entity/Q8"}, "name": {"value": "Actor 8"}, "ko": {"value": "배우8"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a8.jpg"}, "dob": {"value": "1978-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581072"}}, {"p": {"value": "http://www.wikidata.org/entity/Q9"}, "name": {"value": "Actor 9"}, "ko": {"value": "배우9"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a9.jpg"}, "dob": {"value": "1979-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581097"}}, {"p": {"value": "http://www.wikidata.org/entity/Q10"}, "name": {"value": "Actor 10"}, "ko": {"value": "배우10"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a10.jpg"}, "dob": {"value": "1980-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581072"}}, {"p": {"value": "http://www.wikidata.org/entity/Q11"}, "name": {"value": "Actor 11"}, "ko": {"value": "배우11"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a11.jpg"}, "dob": {"value": "1981-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581097"}}, {"p": {"value": "http://www.wikidata.org/entity/Q12"}, "name": {"value": "Actor 12"}, "ko": {"value": "배우12"}, "img": {"value": "http://commons.wikimedia.org/wiki/Special:FilePath/a12.jpg"}, "dob": {"value": "1982-06-15T00:00:00Z"}, "gender": {"value": "http://www.wikidata.org/entity/Q6581072"}}]}}'''
+
+
 def fake_backend(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
     host, path, q = request.url.host, request.url.path, request.url.params
@@ -128,6 +131,8 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json=[[{"state": v, "last_changed": t} for v, t in zip(series, times)]])
     if host == "phrack.org" and path == "/issues/73/word-machines-for-weird-machines.html":
         return httpx.Response(200, text=PHRACK_TEXT)
+    if host == "query.wikidata.org" and path == "/sparql":
+        return httpx.Response(200, text=KQUIZ_JSON)
     if host == "phrack.org" and path == "/index_latest.html":
         return httpx.Response(200, text=PHRACK_HTML)
     if host == "jobs.test" and path.startswith("/api/"):
@@ -279,7 +284,7 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind in ("recall", "todo", "bite", "lesson", "career"):
+        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz"):
             continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
@@ -1029,11 +1034,11 @@ def test_math_progress_is_kept():
                            (0, "probability", 0), (0, "probability", 0), (0, "probability", 0)]:
         st._db.execute("INSERT INTO math_attempts (ts, ref, topic, correct, tries, revealed) VALUES (?, 'r', ?, ?, 1, ?)", (now - ago * day, topic, ok, 1 - ok))
     stats = st.math_stats(now)
-    assert stats["today"] == {"tried": 4, "right": 1} and stats["streak_days"] == 3
+    assert stats["today"] == {"tried": 4, "right": 1, "helped": 0} and stats["streak_days"] == 3
     assert stats["weakest"] == "probability" and stats["weakest_rate"] == 0
     with make_client(full_settings()) as c:
         r = c.post("/api/math", json={"ref": "math:x", "topic": "geometry", "correct": True, "tries": 2})
-        assert r.status_code == 200 and r.json()["today"] == {"tried": 1, "right": 1}
+        assert r.status_code == 200 and r.json()["today"] == {"tried": 1, "right": 1, "helped": 0}
         assert r.json()["streak_days"] == 1
         assert c.get("/api/math/stats").json()["all"]["tried"] == 1
 
@@ -1529,4 +1534,82 @@ def test_not_interested_topics_are_kept_out():
         c.delete("/api/me/avoid/software")
         assert c.delete("/api/me/avoid/lighthouse").json()["avoid"] == ["sports"]
         assert c.get("/api/card/wikipedia").status_code == 200
+
+
+def test_math_help_is_tracked():
+    with make_client(full_settings()) as c:
+        card = c.get("/api/card/math").json()
+        assert card["actions"][0]["assist"] == "tutor"
+        assert c.post("/api/math/assist", json={"ref": "m1", "topic": "algebra", "kind": "tutor"}).status_code == 204
+        c.post("/api/math/assist", json={"ref": "m1", "topic": "algebra", "kind": "hint"})
+        c.post("/api/math/assist", json={"ref": "m2", "topic": "geometry", "kind": "fix"})
+        assert c.post("/api/math/assist", json={"ref": "m3", "topic": "x", "kind": "cheat"}).status_code == 422
+        st = c.get("/api/math/stats").json()
+    assert st["today"]["helped"] == 2 and st["most_help"] == "algebra"
+    assert st["help_30d"] == {"tutor": 1, "hint": 1, "fix": 1}
+
+
+def test_translate_hands_the_text_over():
+    acts = curator.phrase_actions("안녕하세요", "ko")
+    assert acts[1]["translate"] == {"text": "안녕하세요", "from": "ko", "to": "en"}
+
+
+def test_kdrama_quiz_for_korean_learners():
+    import asyncio
+    from datetime import date
+    from app import kquiz
+    kquiz._people.clear()
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(fake_backend)) as hc:
+            return [await kquiz.card(hc, "es", "es", random.Random(n), today=date(2026, 11, 18)) for n in range(12)]
+    cards = asyncio.run(run())
+    who = [c for c in cards if c.title == "¿Quién es?"]
+    age = [c for c in cards if c.title == "¿Cuántos años tiene?"]
+    assert who and age
+    for c in cards:
+        q = c.quiz
+        assert len(q["choices"]) == 4 and len(set(q["choices"])) == 4 and 0 <= q["answer"] < 4
+        assert c.image.startswith("https://commons.wikimedia.org/wiki/Special:FilePath/") and c.label == "Quiz de K-drama"
+    c = age[0]
+    n = int(c.ref.split(":")[1].removeprefix("Q"))
+    assert c.quiz["choices"][c.quiz["answer"]] == str(2026 - (1970 + n) - 0)  # born 15 June, so birthday passed
+    w = who[0]
+    right = w.quiz["choices"][w.quiz["answer"]]
+    assert right in w.quiz["solution"]
+
+    # Only for people learning Korean.
+    with make_client(full_settings(languages_learning=[("Telugu", "te")])) as c:
+        assert not c.get("/api/sources").json()["sources"]["kquiz"]["configured"]
+    with make_client(full_settings(languages_learning=[("Korean", "ko")])) as c:
+        assert c.get("/api/sources").json()["sources"]["kquiz"]["configured"]
+
+
+def test_phrase_lessons_ask_what_it_means(monkeypatch):
+    import asyncio
+    from app import lessons
+
+    async def ask(client, s, prompt, system=None):
+        assert "three plausible but wrong" in prompt
+        return json.dumps({"items": [{"text": "我想要一碗面。", "romanization": "Wǒ xiǎngyào yī wǎn miàn.",
+                                      "translation": "I would like a bowl of noodles.",
+                                      "words": [{"word": "面", "romanization": "miàn", "meaning": "noodles"}],
+                                      "note": "Polite.", "wrong": ["I ate rice.", "Where is the bowl?", "I want tea."]}]})
+    out = asyncio.run(lessons._phrases(None, full_settings(), {"lang": "en", "lang_name": "English"},
+                                        {"name": "Mandarin", "code": "zh"}, ask, random.Random(1)))
+    q = out[0]["quiz"]
+    assert q["choices"][q["answer"]] == "I would like a bowl of noodles." and len(q["choices"]) == 4
+    assert out[0]["blurb"].startswith("What does it mean?")
+
+
+def test_immich_preview_falls_back_to_thumbnail():
+    def backend(request):
+        if request.url.host == "im.test" and request.url.path.endswith("/thumbnail"):
+            if request.url.params.get("size") == "preview":
+                return httpx.Response(404, json={"message": "no preview"})
+            return httpx.Response(200, content=b"\xff\xd8small", headers={"content-type": "image/jpeg"})
+        return fake_backend(request)
+    with make_client(full_settings(), handler=backend) as c:
+        r = c.get("/img", params={"src": f"{IM}/api/assets/p1/thumbnail?size=preview"})
+    assert r.status_code == 200 and r.content == b"\xff\xd8small"
 

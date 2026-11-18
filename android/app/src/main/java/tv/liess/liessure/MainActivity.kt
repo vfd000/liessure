@@ -226,6 +226,14 @@ class MainActivity : Activity() {
         try {
             startActivity(target)
         } catch (e: ActivityNotFoundException) {
+            // An intent: link with a fallback (e.g. Google Translate not installed): open the fallback here.
+            val fallback = if (uri.scheme == "intent") intent.getStringExtra("browser_fallback_url").orEmpty() else ""
+            val fb = Uri.parse(fallback)
+            if (fb.scheme == "https" && !fb.host.isNullOrEmpty()) {
+                visiting.add(fb.host!!)
+                web.loadUrl(fallback)
+                return
+            }
             Toast.makeText(this, "Nothing on this phone opens that link", Toast.LENGTH_SHORT).show()
         }
     }

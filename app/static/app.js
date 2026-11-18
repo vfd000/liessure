@@ -4,7 +4,7 @@
 const LABELS = {
   wikipedia: "Wikipedia", news: "News", game: "Games", video: "Videos", movie: "Movies",
   show: "Series", song: "Music", photo: "Photos", language: "Telugu", homelab: "Home lab",
-  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers",
+  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers", kquiz: "K-drama",
 };
 const android = window.LiessureAndroid || null; // injected by the Android app
 // The page's own words in the reader's language (/api/me's lang); cards carry their own.
@@ -17,7 +17,9 @@ const UI = {
     "Wikipedia": "Wikipedia", "News": "Noticias", "Videos": "Vídeos", "Movies": "Películas", "Series": "Series",
     "Music": "Música", "Photos": "Fotos", "Math": "Mates", "Recall": "Repaso", "Bite-size": "Bocados",
     "Lessons": "Lecciones", "Home": "Casa", "Languages": "Idiomas", "Careers": "Carreras",
-    "Not interested": "No me interesa", "Hide everything about:": "Ocultar todo sobre:", "Hide": "Ocultar",
+    "Not interested": "No me interesa", "Right!": "¡Correcto!", "Not quite.": "Casi, pero no.",
+    "Right. You remembered it.": "Correcto. Lo recordaste.", "Not quite. It'll come back sooner.": "Casi. Volverá pronto.",
+    "K-drama": "K-drama", "Hide everything about:": "Ocultar todo sobre:", "Hide": "Ocultar",
     "a word, e.g. golf": "una palabra, p. ej. golf", "Just this card": "Solo esta tarjeta",
     "Hidden topics: ": "Temas ocultos: ", "sports": "deportes", "alcohol": "alcohol",
     "animal products": "productos animales",
@@ -66,6 +68,17 @@ function report(c, action) {
   const body = JSON.stringify({ kind: c.kind, ref: c.ref, action, title: c.title, subtitle: c.subtitle || "",
     text: (c.blurb || "").slice(0, 4000), url: c.url || "" });
   fetch("/api/event", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
+}
+
+// Google's Translate app claims translate.google.com links and drops the text in them, so on Android
+// the text goes to the app the way the text-selection "Translate" does (PROCESS_TEXT); the web link is
+// the fallback (newer app versions open it in place when Translate isn't installed).
+function openTranslate(tr, url) {
+  if (!android) return openUrl(url);
+  const e = encodeURIComponent;
+  openUrl("intent:#Intent;action=android.intent.action.PROCESS_TEXT;type=text/plain;" +
+    "package=com.google.android.apps.translate;B.android.intent.extra.PROCESS_TEXT_READONLY=true;" +
+    `S.android.intent.extra.PROCESS_TEXT=${e(tr.text)};S.browser_fallback_url=${e(url)};end`);
 }
 
 function openUrl(url, inApp) {
@@ -186,7 +199,11 @@ function renderCard(c) {
   go.href = c.url;
   go.target = "_blank";
   go.rel = "noopener";
-  go.onclick = (e) => { e.preventDefault(); report(c, "open"); openUrl(c.url, c.open_in_app); };
+  go.onclick = (e) => {
+    e.preventDefault();
+    report(c, "open");
+    if (c.translate && c.translate.text) openTranslate(c.translate, c.url); else openUrl(c.url, c.open_in_app);
+  };
   actions.append(go);
   for (const a of c.actions || []) {
     if (a.speak) {
@@ -209,7 +226,11 @@ function renderCard(c) {
       if (a.android && !android) continue; // e.g. argosy:// only means something on the phone
       const l = el("a", "", a.label);
       l.href = a.url;
-      l.onclick = (e) => { e.preventDefault(); openUrl(a.url, a.in_app); };
+      l.onclick = (e) => {
+        e.preventDefault();
+        if (a.assist) assisted(c, a.assist);
+        if (a.translate) openTranslate(a.translate, a.url); else openUrl(a.url, a.in_app);
+      };
       actions.append(l);
     }
   }
@@ -349,6 +370,13 @@ function scratchPad() {
   return wrap;
 }
 
+// Help used on a math problem (hint, fix-it, tutor): kept, so progress shows where help was needed.
+function assisted(c, kind) {
+  const q = c.quiz || {};
+  fetch("/api/math/assist", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ref: c.ref, topic: q.topic || "", kind }) }).catch(() => {});
+}
+
 // "3/8", "-12", "1,200", "28.3", "$0.05": a number, or NaN.
 function parseNum(s) {
   s = String(s).trim().replace(/[\s,$%°]/g, "").replace(/−/g, "-");
@@ -374,9 +402,12 @@ function renderQuiz(c) {
           if (j === Number(q.answer)) x.classList.add("right");
         });
         if (!right) b.classList.add("wrong");
-        result.textContent = right ? "Right. You remembered it." : "Not quite. It'll come back sooner.";
+        result.textContent = q.id
+          ? (right ? t("Right. You remembered it.") : t("Not quite. It'll come back sooner."))
+          : (right ? t("Right!") : t("Not quite."));
         solution.hidden = !q.solution;
         report(c, "play");
+        if (!q.id) return; // only recall questions are scheduled
         fetch(`/api/recall/${q.id}`, { method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ correct: right }) })
           .then((r) => r.json())
@@ -408,6 +439,7 @@ function renderQuiz(c) {
     const fix = el("button", "fix", "Help me fix it");
     const help = el("p", "why help");
     fix.onclick = async () => {
+      assisted(c, "fix");
       fix.disabled = true;
       help.textContent = "Working out where it went wrong…";
       box.insertBefore(help, result.nextSibling);
@@ -431,7 +463,9 @@ function renderQuiz(c) {
         .then((st) => {
           const bits = [`Today ${st.today.right}/${st.today.tried}`, `this week ${st.week.right}/${st.week.tried}`];
           if (st.streak_days) bits.push(`${st.streak_days}-day streak`);
+          if (st.today.helped) bits.push(`help on ${st.today.helped} today`);
           if (st.weakest) bits.push(`weakest lately: ${st.weakest}`);
+          if (st.most_help && st.most_help !== st.weakest) bits.push(`most help: ${st.most_help}`);
           box.append(el("p", "why", bits.join(" · ")));
         }).catch(() => {});
     };
@@ -452,7 +486,7 @@ function renderQuiz(c) {
       }
     };
     input.onkeydown = (e) => { if (e.key === "Enter") check.onclick(); };
-    hint.onclick = () => { result.textContent = q.hint; };
+    hint.onclick = () => { result.textContent = q.hint; assisted(c, "hint"); };
     show.onclick = () => {
       result.textContent = `Answer: ${q.answer}`;
       solution.hidden = false;

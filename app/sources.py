@@ -62,6 +62,9 @@ class Card:
     details_label: str = ""
     # More text fetched when asked for: {"label", "url"} (a job's full description).
     more: dict[str, str] = field(default_factory=dict)
+    # Text the Android app hands straight to Google Translate (its app drops text passed in a link):
+    # {"text", "from", "to"}; url stays the web fallback.
+    translate: dict[str, str] = field(default_factory=dict)
     # A photo the page can ask about (Identify, Ask Claude): {"id", "when", "place", "lat", "lon"}.
     photo: dict[str, Any] = field(default_factory=dict)
     # Something to answer in place. Typed: {"answer", "tolerance", "hint", "solution"};
@@ -1033,6 +1036,11 @@ async def bite(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
     raise Unavailable("bite-size cards come from the pool")
 
 
+async def kquiz_card(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    from . import kquiz  # late import: kquiz imports this module
+    return await kquiz.card(client, "es" if s.reply_lang == "Spanish" else "en", s.wikipedia_lang, rng)
+
+
 # --------------------------------------------------------------------- jobs
 # The household jobs service (vfd000/jobs). Job descriptions are scraped web
 # text: they're shown as data and never reach the curator or the interest
@@ -1684,7 +1692,7 @@ async def math(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
         url=f"https://{s.wikipedia_lang}.wikipedia.org/wiki/{quote(p.wiki.replace(' ', '_'))}",
         quiz={"answer": p.answer, "tolerance": p.tolerance, "hint": p.hint, "solution": p.solution,
               "scratch": True, "topic": p.topic},
-        actions=[{"label": "Tutor me", "url": tutor_url(p, s.reply_lang)}],
+        actions=[{"label": "Tutor me", "url": tutor_url(p, s.reply_lang), "assist": "tutor"}],
         open_label="More info",
         ref="math:" + hashlib.sha1(p.question.encode()).hexdigest()[:16],
     )
@@ -1741,6 +1749,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "bite": bite,
     "lesson": bite,  # also served by main.py from a per-person pool
     "career": bite,  # likewise
+    "kquiz": kquiz_card,
 }
 
 
@@ -1767,4 +1776,5 @@ def configured(s: Settings) -> dict[str, bool]:
         "bite": bool(s.llm_url and s.llm_key),  # the curator writes them
         "lesson": bool(s.llm_url and s.llm_key),
         "career": bool(s.llm_url and s.llm_key),
+        "kquiz": True,  # only for readers learning Korean (main.kinds_for)
     }

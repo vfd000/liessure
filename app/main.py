@@ -87,6 +87,12 @@ class MathHelp(BaseModel):
     solution: str = Field("", max_length=600)
 
 
+class MathAssist(BaseModel):
+    ref: str = Field(max_length=64)
+    topic: str = Field("", max_length=40)
+    kind: str = Field(pattern="^(hint|fix|tutor)$")
+
+
 class MathAnswer(BaseModel):
     ref: str = Field(max_length=64)
     topic: str = Field("", max_length=40)
@@ -261,6 +267,12 @@ def create_app(
         return {**p, "lang": p.get("lang", "en"), "lang_name": p.get("lang_name", "English"),
                 "learning": [{"name": n, "code": c, "style": "beginner"} for n, c in s.languages_learning]}
 
+    def learns_korean(user: str) -> bool:
+        codes = [x.get("code") for x in prefs_for(user).get("learning") or []]
+        if user == auth.OWNER and not codes:
+            codes = [c for _, c in settings.languages_learning]
+        return "ko" in codes
+
     def kinds_for(user: str) -> set[str]:
         """The owner sees everything; others don't see cards built from the owner's own services,
         nor kinds their preferences turn off. Lessons are for people with something to learn."""
@@ -271,6 +283,8 @@ def create_app(
             kinds.discard("lesson")
         if not p.get("career"):
             kinds.discard("career")
+        if not learns_korean(user):
+            kinds.discard("kquiz")
         return kinds
 
     async def one(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
@@ -467,6 +481,12 @@ def create_app(
             raise HTTPException(502, f"the LLM didn't answer: {type(e).__name__}")
         return {"help": text[:2000]}
 
+    @app.post("/api/math/assist", status_code=204)
+    async def math_assist(request: Request, a: MathAssist):
+        """Help used on a math problem (hint, fix-it, Claude tutor), so progress shows where help was needed."""
+        store.record_math_help(a.ref, a.topic, a.kind, user=request.state.user)
+        return Response(status_code=204)
+
     @app.get("/api/math/stats")
     async def math_stats(request: Request):
         return store.math_stats(user=request.state.user)
@@ -541,14 +561,21 @@ def create_app(
         headers = sources.auth_headers_for(settings, src)
         if headers is None or ".." in src:
             raise HTTPException(400, "not an allowed image source")
-        try:
-            r = await request.app.state.client.get(src, headers=headers)
-        except httpx.HTTPError:
-            raise HTTPException(502, "image fetch failed")
-        ctype = r.headers.get("content-type", "")
-        if r.status_code != 200 or not ctype.startswith("image/"):
-            raise HTTPException(502, "image fetch failed")
-        return Response(r.content, media_type=ctype, headers={"Cache-Control": "private, max-age=86400"})
+        # Immich has no preview for some photos (a failed thumbnail job, odd formats): try the small thumbnail.
+        tries = [src]
+        if "/thumbnail?size=preview" in src:
+            tries.append(src.replace("size=preview", "size=thumbnail"))
+        for url in tries:
+            try:
+                r = await request.app.state.client.get(url, headers=headers)
+            except httpx.HTTPError as e:
+                log.warning("img %s: %s", url[:160], type(e).__name__)
+                continue
+            ctype = r.headers.get("content-type", "")
+            if r.status_code == 200 and ctype.startswith("image/"):
+                return Response(r.content, media_type=ctype, headers={"Cache-Control": "private, max-age=86400"})
+            log.warning("img %s: HTTP %s %s", url[:160], r.status_code, ctype)
+        raise HTTPException(502, "image fetch failed")
 
     @app.get("/stream/audio/{item_id}")
     async def stream_audio(request: Request, item_id: str):
