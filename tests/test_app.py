@@ -286,7 +286,7 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia"):
+        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia", "session"):
             continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
@@ -1878,4 +1878,40 @@ def test_jeopardy_downloads_once_in_the_background(tmp_path):
             await jeopardy._task
             return await jeopardy.card(hc, str(tmp_path), random.Random(1))
     assert asyncio.run(go()).quiz == {"text": True, "answer": "an answer"}
+
+
+BOARD = {"cards": [
+    {"ref": "agentbox:f2f66971", "lane": "needs-you", "bucket": "needs-you", "title": "update chromium",
+     "topic": "Claude infra", "when": "2026-11-18T17:40:00Z", "question": "Deploy f3a9c1 is proposed: approve it?",
+     "prs": [{"n": 1122, "state": "OPEN", "title": "browser: chromium 141"}],
+     "approvals": ["https://approvals.liess.tv/d/20261118-191500-f3a9c1", "https://evil.example/x"]},
+    {"ref": "agentbox:aa11bb22", "lane": "running", "bucket": "running", "title": "busy", "when": "x"},
+    {"ref": "laptop:cc33dd44", "lane": "finished", "bucket": "done", "title": "Tidy the NAS shares",
+     "when": "2026-11-18T10:00:00Z", "outcome": "Done: three shares merged."},
+]}
+
+
+def test_session_cards_from_the_hub_board():
+    seen = []
+
+    def backend(request):
+        if request.url.host == "relay.test":
+            assert request.url.path == "/v1/board" and request.headers["authorization"] == "Bearer bt"
+            seen.append(1)
+            return httpx.Response(200, json=BOARD)
+        return fake_backend(request)
+    sources._board_cache._data.clear()
+    s = full_settings(sessions_url="http://relay.test", sessions_token="bt")
+    with make_client(s, handler=backend) as c:
+        cards = [c.get("/api/card/session").json() for _ in range(20)]
+    assert len(seen) == 1  # the board is cached
+    assert {x["title"] for x in cards} == {"update chromium", "Tidy the NAS shares"}  # never a running one
+    need = next(x for x in cards if x["title"] == "update chromium")
+    assert need["label"] == "Claude · Needs you" and need["blurb"] == "Deploy f3a9c1 is proposed: approve it?"
+    assert need["url"] == "https://agents.liess.tv/hub/#agentbox:f2f66971" and need["subtitle"] == "Claude infra · PR #1122 (open)"
+    assert need["actions"] == [{"label": "Open approval", "url": "https://approvals.liess.tv/d/20261118-191500-f3a9c1"}]
+    done = next(x for x in cards if x["title"] == "Tidy the NAS shares")
+    assert done["label"] == "Claude · Finished" and done["ref"] == "session:laptop:cc33dd44:done:2026-11-18T10:00:00Z"
+    with make_client(full_settings()) as c:
+        assert not c.get("/api/sources").json()["sources"]["session"]["configured"]
 

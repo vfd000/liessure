@@ -49,12 +49,13 @@ DEFAULT_WEIGHTS = {
     "career": 2,
     "kquiz": 2,
     "trivia": 2,
+    "session": 3,
     "flashcard": 3,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "flashcard": 2}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "session": 2, "flashcard": 2}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
 RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite"})
@@ -99,10 +100,10 @@ def parse_user_prefs(raw: str, path: str = "") -> dict[str, dict]:
 
 
 # Kinds only the owner sees: they read the owner's own services (jobs, lists, the lab).
-OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry"})
+OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry", "session"})
 
 # Kinds whose titles never go to the LLM as evidence of what you like.
-UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia"})
+UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia", "session"})
 
 KINDS = tuple(DEFAULT_WEIGHTS)
 
@@ -337,6 +338,12 @@ class Settings:
     lists_token: str = ""
     todo_list_id: int = 6
 
+    # Claude sessions on the agent box (Session Hub): the fleet relay's GET /v1/board, with a token that
+    # opens nothing else. Cards link to the hub board; they never answer or approve anything.
+    sessions_url: str = ""
+    sessions_token: str = ""
+    hub_url: str = "https://agents.liess.tv/hub/"
+
     # What a kWh is worth: PSE's effective rate, what solar saves (or earns back) per kWh.
     home_energy_rate: float = 0.22
 
@@ -427,6 +434,9 @@ class Settings:
             lists=svc("LISTS"),
             lists_token=_env("LISTS_TOKEN"),
             todo_list_id=int(_env("TODO_LIST_ID", "6")),
+            sessions_url=_strip(_env("SESSIONS_URL")),
+            sessions_token=_env("SESSIONS_TOKEN"),
+            hub_url=_env("HUB_URL", cls.hub_url),
         )
 
 

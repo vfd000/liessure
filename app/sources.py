@@ -1050,6 +1050,60 @@ async def bite(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
     raise Unavailable("bite-size cards come from the pool")
 
 
+# --------------------------------------------------------------------- sessions
+# Claude sessions from Session Hub's board (the agent box's fleet relay): ones that need axl, and ones
+# that finished. The text is the sessions' own words: shown as data, never sent to the curator.
+
+_board_cache = _TTLCache(60)
+SESSION_LANES = {"needs-you": "Needs you", "stuck": "Stuck", "done": "Finished", "failed": "Failed",
+                 "unfinished": "Stopped"}
+
+
+async def session_board(client: httpx.AsyncClient, s: Settings) -> dict[str, Any]:
+    hit = _board_cache.get("board")
+    if hit is None:
+        r = await client.get(f"{s.sessions_url}/v1/board", headers={"Authorization": f"Bearer {s.sessions_token}"},
+                             timeout=20)
+        r.raise_for_status()
+        hit = r.json()
+        _board_cache.put("board", hit)
+    return hit
+
+
+def session_card(s: Settings, c: dict[str, Any]) -> Card:
+    bucket = str(c.get("bucket") or "")
+    text = c.get("question") or c.get("outcome") or c.get("detail") or c.get("last_tail") or ""
+    actions = [{"label": "Open approval", "url": u} for u in (c.get("approvals") or [])[:2]
+               if str(u).startswith("https://approvals.liess.tv/")]
+    prs = ", ".join(f"PR #{p['n']}" + (f" ({str(p.get('state', '')).lower()})" if p.get("state") else "")
+                    for p in (c.get("prs") or [])[:3] if isinstance(p, dict) and p.get("n"))
+    return Card(
+        kind="session",
+        label=f"Claude · {SESSION_LANES.get(bucket, bucket or 'Session')}",
+        title=_clip(str(c.get("title") or c.get("ask") or "A session"), 160),
+        subtitle=" · ".join(x for x in (str(c.get("topic") or ""), prs) if x),
+        blurb=_clip(str(text), 600),
+        url=s.hub_url + "#" + quote(str(c.get("ref") or ""), safe=":"),
+        open_label="Open in Session Hub",
+        actions=actions,
+        # A new question or outcome is a new card; swiping one away doesn't hide the session's next one.
+        ref=f"session:{c.get('ref')}:{bucket}:{c.get('when')}",
+    )
+
+
+async def session(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    """A session that needs axl (most likely), or one that finished."""
+    if not (s.sessions_url and s.sessions_token):
+        raise Unavailable("session hub not configured")
+    cards = [c for c in (await session_board(client, s)).get("cards") or [] if isinstance(c, dict)]
+    needs = [c for c in cards if c.get("bucket") in ("needs-you", "stuck")]
+    finished = [c for c in cards if c.get("bucket") in ("done", "failed", "unfinished") and c.get("lane") == "finished"]
+    pool = needs if needs and (not finished or rng.random() < 0.75) else finished
+    if not pool:
+        raise Unavailable("no sessions need you or have finished")
+    return session_card(s, rng.choice(pool))
+
+
 async def trivia_card(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
     from . import jeopardy  # late import: jeopardy imports this module
     return await jeopardy.card(client, s.data_dir, rng)
@@ -1797,6 +1851,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "career": bite,  # likewise
     "kquiz": kquiz_card,
     "trivia": trivia_card,
+    "session": session,
     "flashcard": bite,  # served by main.py from the person's decks
 }
 
@@ -1825,6 +1880,7 @@ def configured(s: Settings) -> dict[str, bool]:
         "lesson": bool(s.llm_url and s.llm_key),
         "career": bool(s.llm_url and s.llm_key),
         "kquiz": True,  # only for readers learning Korean (main.kinds_for)
+        "session": bool(s.sessions_url and s.sessions_token),
         "trivia": True,  # Jeopardy! clues, downloaded to the data volume on first use (jeopardy.py)
         "flashcard": True,  # only for people with flashcards due (main.kinds_for)
     }
