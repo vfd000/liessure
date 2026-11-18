@@ -1050,6 +1050,11 @@ async def bite(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Ca
     raise Unavailable("bite-size cards come from the pool")
 
 
+async def trivia_card(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    from . import jeopardy  # late import: jeopardy imports this module
+    return await jeopardy.card(client, s.data_dir, rng)
+
+
 async def kquiz_card(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
     from . import kquiz  # late import: kquiz imports this module
     return await kquiz.card(client, "es" if s.reply_lang == "Spanish" else "en", s.wikipedia_lang, rng)
@@ -1791,6 +1796,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "lesson": bite,  # also served by main.py from a per-person pool
     "career": bite,  # likewise
     "kquiz": kquiz_card,
+    "trivia": trivia_card,
     "flashcard": bite,  # served by main.py from the person's decks
 }
 
@@ -1819,5 +1825,6 @@ def configured(s: Settings) -> dict[str, bool]:
         "lesson": bool(s.llm_url and s.llm_key),
         "career": bool(s.llm_url and s.llm_key),
         "kquiz": True,  # only for readers learning Korean (main.kinds_for)
+        "trivia": True,  # Jeopardy! clues, downloaded to the data volume on first use (jeopardy.py)
         "flashcard": True,  # only for people with flashcards due (main.kinds_for)
     }

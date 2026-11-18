@@ -48,12 +48,13 @@ DEFAULT_WEIGHTS = {
     "lesson": 3,
     "career": 2,
     "kquiz": 2,
+    "trivia": 2,
     "flashcard": 3,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "flashcard": 2}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "flashcard": 2}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
 RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite"})
@@ -101,7 +102,7 @@ def parse_user_prefs(raw: str, path: str = "") -> dict[str, dict]:
 OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry"})
 
 # Kinds whose titles never go to the LLM as evidence of what you like.
-UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo"})
+UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia"})
 
 KINDS = tuple(DEFAULT_WEIGHTS)
 
