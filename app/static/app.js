@@ -17,6 +17,10 @@ const UI = {
     "Wikipedia": "Wikipedia", "News": "Noticias", "Videos": "Vídeos", "Movies": "Películas", "Series": "Series",
     "Music": "Música", "Photos": "Fotos", "Math": "Mates", "Recall": "Repaso", "Bite-size": "Bocados",
     "Lessons": "Lecciones", "Home": "Casa", "Languages": "Idiomas", "Careers": "Carreras",
+    "Not interested": "No me interesa", "Hide everything about:": "Ocultar todo sobre:", "Hide": "Ocultar",
+    "a word, e.g. golf": "una palabra, p. ej. golf", "Just this card": "Solo esta tarjeta",
+    "Hidden topics: ": "Temas ocultos: ", "sports": "deportes", "alcohol": "alcohol",
+    "animal products": "productos animales",
   },
 };
 const t = (s) => (UI[UI_LANG] && UI[UI_LANG][s]) || s;
@@ -82,6 +86,10 @@ function renderCard(c) {
     card.append(img);
   }
   const body = el("div", "body");
+  const nope = el("button", "nope", "✕");
+  nope.title = nope.ariaLabel = t("Not interested");
+  nope.onclick = () => notInterested(c, card);
+  body.append(nope);
   body.append(el("div", "label", c.label));
   body.append(el("h2", "title", c.title));
   if (c.subtitle) body.append(el("div", "subtitle", c.subtitle));
@@ -210,6 +218,55 @@ function renderCard(c) {
 
   if (c.image) card.querySelector(".media").onclick = () => { report(c, "open"); openUrl(c.url, c.open_in_app); };
   return card;
+}
+
+// "Not interested": hide this card, and (optionally) never show its topic again.
+const avoidDialog = (() => {
+  const d = el("dialog", "ideas");
+  d.innerHTML = `<form method="dialog"><h2></h2><p class="why"></p><div class="chips"></div>
+    <div class="quiz-row"><input type="text" maxlength="60"><button class="primary" value="add"></button></div>
+    <div class="actions"><button value="close"></button></div><p class="why avoid-list"></p></form>`;
+  document.body.append(d);
+  return d;
+})();
+async function notInterested(c, cardEl) {
+  cardEl.remove();
+  const d = avoidDialog;
+  d.querySelector("h2").textContent = t("Not interested");
+  d.querySelector("p.why").textContent = t("Hide everything about:");
+  const input = d.querySelector("input");
+  input.value = "";
+  input.placeholder = t("a word, e.g. golf");
+  d.querySelector('button[value="add"]').textContent = t("Hide");
+  d.querySelector('button[value="close"]').textContent = t("Just this card");
+  const chips = d.querySelector(".chips");
+  const list = d.querySelector(".avoid-list");
+  const show = (terms) => { list.textContent = terms.length ? t("Hidden topics: ") + terms.join(", ") : ""; };
+  const add = async (term) => {
+    const r = await fetch("/api/me/avoid", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ term }) }).catch(() => null);
+    if (r && r.ok) show((await r.json()).avoid);
+  };
+  chips.replaceChildren();
+  try {
+    const { avoid: terms, suggested } = await (await fetch("/api/me/avoid")).json();
+    show(terms);
+    for (const s of suggested) {
+      const b = el("button", "chip", t(s));
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(terms.includes(s)));
+      b.onclick = async () => { await add(s); b.setAttribute("aria-pressed", "true"); };
+      chips.append(b);
+    }
+  } catch {}
+  d.querySelector("form").onsubmit = async (e) => {
+    if (e.submitter && e.submitter.value === "add" && input.value.trim()) {
+      e.preventDefault();
+      await add(input.value.trim());
+      input.value = "";
+    }
+  };
+  d.showModal();
 }
 
 // Say a phrase: Android's text-to-speech in the app, the browser's voices elsewhere,

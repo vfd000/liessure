@@ -1506,3 +1506,27 @@ def test_the_owner_gets_beginner_lessons_in_the_languages_he_is_learning(monkeyp
     assert "beginner Telugu" in seen["prompts"][0] and "whose language is English" in seen["prompts"][0]
     assert not any("Wikipedia" in (l or "") for l in labels)
 
+
+def test_not_interested_topics_are_kept_out():
+    from app import avoid as av
+    football = {"title": "Linfield F.C.", "subtitle": "Association football club in Northern Ireland", "label": "Wikipedia"}
+    assert av.matches(["sports"], football)
+    assert av.matches(["alcohol"], {"title": "I Drink Wine", "label": "Song"})
+    assert av.matches(["animal products"], {"title": "Pulled pork", "blurb": "A barbecue dish."})
+    assert not av.matches(["sports"], {"title": "Morphology (linguistics)", "subtitle": "Study of words"})
+    assert not av.matches(["alcohol"], {"title": "Ginkgo", "blurb": "A tree. Ginseng is different."})
+    assert not av.matches(["animal products"], {"title": "Marmot", "blurb": "A large ground squirrel."})
+    assert av.matches(["opera"], {"title": "Tosca", "subtitle": "Opera by Puccini"}) and not av.matches(["opera"], {"title": "Operations"})
+
+    with make_client(full_settings()) as c:
+        assert c.get("/api/me/avoid").json() == {"avoid": [], "suggested": ["sports", "alcohol", "animal products"]}
+        assert c.post("/api/me/avoid", json={"term": "Sports"}).json()["avoid"] == ["sports"]
+        c.post("/api/me/avoid", json={"term": "lighthouse"})
+        c.post("/api/me/avoid", json={"term": "software"})
+        # The fake Wikipedia only has a lighthouse (random) and "... is software" articles (interest search);
+        # with both hidden, the card is skipped, never shown.
+        assert c.get("/api/card/wikipedia").status_code == 503
+        c.delete("/api/me/avoid/software")
+        assert c.delete("/api/me/avoid/lighthouse").json()["avoid"] == ["sports"]
+        assert c.get("/api/card/wikipedia").status_code == 200
+

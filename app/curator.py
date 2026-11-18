@@ -406,6 +406,9 @@ def _prompt(s: Settings, store: Store, kind: str, k: Kind, cands: list[Cand]) ->
     now = datetime.now().strftime("%A %H:%M")
     head = [f"About the viewer:\n{s.curator_profile}\n", f"Local time: {now}\n",
             f"These are {k.noun}. Guidance: {k.guidance}\n"]
+    never = store.avoid_list("owner")  # the pool is picked for the owner
+    if never:
+        head.append(f"Never pick anything about: {', '.join(never)}.\n")
     recent = store.recent_titles(kind, 12)
     if recent:
         head.append("Recently opened:\n" + "\n".join(f"- {t}" for t in recent) + "\n")
