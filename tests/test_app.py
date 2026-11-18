@@ -86,6 +86,7 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
     if host.endswith("wikipedia.org") and path.startswith("/api/rest_v1/page/random"):
         return httpx.Response(200, json={
             "type": "standard", "title": "Lighthouse", "description": "tower",
+            "coordinates": {"lat": 47.73, "lon": -122.03},
             "extract": "A lighthouse is a tower. " * 20,
             "thumbnail": {"source": "https://upload.wikimedia.org/x.jpg"},
             "content_urls": {"mobile": {"page": f"https://{host.split('.')[0]}.m.wikipedia.org/wiki/Lighthouse"}},
@@ -1766,4 +1767,17 @@ def test_swiping_a_todo_to_done_ticks_it_off():
         assert c.post("/api/card-state", json={"card": {"kind": "news", "ref": "x", "title": "t"},
                                                 "state": "done"}).status_code == 204
     assert patched == [("/lists/6/items/7", {"checked": True}), ("/lists/6/items/7", {"checked": False})]
+
+
+def test_place_cards_carry_a_map_location():
+    assert sources.geo_of({"lat": 1.5, "lon": 2}, "X") == {"lat": 1.5, "lon": 2.0, "name": "X"}
+    assert sources.geo_of([{"lat": 3, "lon": 4}], "Y")["lat"] == 3.0
+    assert sources.geo_of(None, "Z") == {} and sources.geo_of({"lat": "n/a"}, "Z") == {}
+    s = full_settings(wiki_interests=[])
+    with make_client(s) as c:
+        card = c.get("/api/card/wikipedia").json()
+    assert card["geo"] == {"lat": 47.73, "lon": -122.03, "name": "Lighthouse"}
+    photo = sources._immich_card(s, {"id": "p1", "exifInfo": {"latitude": 35.0, "longitude": 135.7, "city": "Kyoto"}}, "")
+    assert photo.geo == {"lat": 35.0, "lon": 135.7, "name": "Kyoto"}
+    assert sources._immich_card(s, {"id": "p2", "exifInfo": {}}, "").geo == {}
 

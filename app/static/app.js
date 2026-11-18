@@ -28,6 +28,7 @@ const UI = {
     "cards": "tarjetas", "due": "pendientes", "Added.": "Añadida.", "Importing…": "Importando…",
     "Imported": "Importadas", "Couldn't import that": "No se pudo importar",
     "Couldn't tick it off the To Do list": "No se pudo marcar en la lista",
+    "Map": "Mapa", "Hide map": "Ocultar mapa", "Open in Maps": "Abrir en Mapas",
     "Search cards you've seen": "Buscar tarjetas que ya viste", "Later": "Después", "Done": "Hecho",
     "Done ✓": "Hecho ✓", "Later ↻": "Después ↻", "Back again": "De nuevo", "empty": "vacío",
     "Back to the feed": "Volver al feed", "Remove from Later": "Quitar de Después", "Found": "Encontradas",
@@ -213,6 +214,32 @@ function renderCard(c) {
     const play = el("button", "primary", "▶ " + (c.embed.label || t("Play here")));
     play.onclick = () => { playInline(card, c.embed); play.remove(); report(c, "play"); };
     actions.append(play);
+  }
+  // A place: Map shows it in the card (OpenStreetMap), with a way out to the phone's maps app.
+  const g = c.geo && c.geo.lat != null ? c.geo
+    : (c.photo && c.photo.lat != null ? { lat: c.photo.lat, lon: c.photo.lon, name: c.title } : null);
+  if (g) {
+    const mapBtn = el("button", "", t("Map"));
+    let shown = null;
+    mapBtn.onclick = () => {
+      if (shown) { shown.remove(); shown = null; mapBtn.textContent = t("Map"); return; }
+      shown = el("div", "map");
+      const f = document.createElement("iframe");
+      const d = 0.02;
+      f.src = "https://www.openstreetmap.org/export/embed.html?" + new URLSearchParams({
+        bbox: [g.lon - d, g.lat - d * 0.6, g.lon + d, g.lat + d * 0.6].join(","), layer: "mapnik",
+        marker: `${g.lat},${g.lon}` });
+      f.loading = "lazy";
+      const out = el("a", "", t("Open in Maps"));
+      const geoUri = `geo:${g.lat},${g.lon}?q=${g.lat},${g.lon}(${encodeURIComponent(g.name || "")})`;
+      const osm = `https://www.openstreetmap.org/?mlat=${g.lat}&mlon=${g.lon}#map=14/${g.lat}/${g.lon}`;
+      out.href = osm;
+      out.onclick = (e) => { e.preventDefault(); openUrl(android ? geoUri : osm); };
+      shown.append(f, out);
+      body.insertBefore(shown, actions);
+      mapBtn.textContent = t("Hide map");
+    };
+    actions.append(mapBtn);
   }
   if (MAKES_FLASHCARDS.has(c.kind)) {
     const mk = el("button", "", t("Make flashcards"));

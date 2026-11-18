@@ -62,6 +62,8 @@ class Card:
     details_label: str = ""
     # More text fetched when asked for: {"label", "url"} (a job's full description).
     more: dict[str, str] = field(default_factory=dict)
+    # Where the card is about, when it's a place: {"lat", "lon", "name"} (a Map button shows it).
+    geo: dict[str, Any] = field(default_factory=dict)
     # Text the Android app hands straight to Google Translate (its app drops text passed in a link):
     # {"text", "from", "to"}; url stays the web fallback.
     translate: dict[str, str] = field(default_factory=dict)
@@ -163,7 +165,17 @@ def _wiki_card(data: dict[str, Any], kind: str, label: str) -> Card:
         image=((data.get("originalimage") or data.get("thumbnail") or {}).get("source") or ""),
         url=page,
         ref=(data.get("titles") or {}).get("canonical") or data.get("title") or "",
+        geo=geo_of(data.get("coordinates"), data.get("title") or ""),
     )
+
+
+def geo_of(coords: Any, name: str) -> dict[str, Any]:
+    """Wikipedia's coordinates (a dict, or a list of them) as a card's geo."""
+    if isinstance(coords, list):
+        coords = coords[0] if coords else None
+    if isinstance(coords, dict) and _num(coords.get("lat")) is not None and _num(coords.get("lon")) is not None:
+        return {"lat": _num(coords["lat"]), "lon": _num(coords["lon"]), "name": name}
+    return {}
 
 
 async def _wiki_interest(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> dict[str, Any]:
@@ -480,6 +492,8 @@ def _immich_card(s: Settings, asset: dict[str, Any], subtitle: str) -> Card:
         url=f"{s.immich.link_base}/photos/{asset['id']}",
         ref=asset["id"],
         details=photo_details(asset),
+        geo={"lat": _num(exif.get("latitude")), "lon": _num(exif.get("longitude")), "name": place or when}
+        if _num(exif.get("latitude")) is not None and _num(exif.get("longitude")) is not None else {},
         photo={"id": asset["id"], "when": when, "place": place,
                "lat": _num(exif.get("latitude")), "lon": _num(exif.get("longitude"))},
     )
