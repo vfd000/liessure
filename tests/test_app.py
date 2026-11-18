@@ -60,6 +60,39 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
             "type": "standard", "title": title, "description": "software", "extract": f"{title} is software. " * 10,
             "content_urls": {"mobile": {"page": f"https://{host.split('.')[0]}.m.wikipedia.org/wiki/{title}"}},
         })
+    if host == "grafana.test":
+        assert request.headers["authorization"] == "Bearer gt"
+        if path == "/api/prometheus/grafana/api/v1/alerts":
+            alerts = [] if "noalerts" in request.headers.get("x-test", "") else [
+                {"labels": {"alertname": "Disk almost full", "instance": "wtr"}, "state": "Alerting",
+                 "annotations": {"summary": "/mnt/6tb is 93% full"}, "activeAt": "2026-11-17T01:02:03Z"},
+                {"labels": {"alertname": "Normal one"}, "state": "Normal"}]
+            return httpx.Response(200, json={"data": {"alerts": alerts}})
+        if path.endswith("/api/v1/query"):
+            if "node_filesystem" in q["query"]:
+                return httpx.Response(200, json={"data": {"result": [
+                    {"metric": {"mountpoint": "/mnt/6tb", "instance": "wtr"}, "value": [0, "0.8213"]}]}})
+            return httpx.Response(200, json={"data": {"result": []}})
+    if host == "ha.test":
+        assert request.headers["authorization"] == "Bearer ht"
+        if path == "/api/states":
+            return httpx.Response(200, json=[
+                {"entity_id": "sensor.envoy_1_lifetime_energy_production", "state": "12.30",
+                 "attributes": {"unit_of_measurement": "MWh"}},
+                {"entity_id": "sensor.envoy_1_lifetime_energy_consumption", "state": "20.004",
+                 "attributes": {"unit_of_measurement": "MWh"}},
+                {"entity_id": "sensor.envoy_1_current_power_production", "state": "2100",
+                 "attributes": {"unit_of_measurement": "W"}},
+                {"entity_id": "weather.forecast_home", "state": "partlycloudy",
+                 "attributes": {"temperature": 48, "temperature_unit": "°F", "humidity": 80}},
+            ])
+        if path.startswith("/api/history/period/"):
+            eid = q["filter_entity_id"]
+            # Lifetime counters (MWh): day before yesterday's close, last midnight, earlier today.
+            series = {"sensor.envoy_1_lifetime_energy_production": ["12.270", "12.288", "12.290"],
+                      "sensor.envoy_1_lifetime_energy_consumption": ["19.980", "19.999", "20.000"]}[eid]
+            times = ["2026-11-15T23:59:00-08:00", "2026-11-16T23:59:00-08:00", "2026-11-17T08:00:00-08:00"]
+            return httpx.Response(200, json=[[{"state": v, "last_changed": t} for v, t in zip(series, times)]])
     if host == "jobs.test" and path.startswith("/api/"):
         assert request.headers["authorization"] == "Bearer jt"
         job = lambda n, **kw: {"id": n, "title": f"Security Engineer {n}", "company": f"Co{n}", "location": "Seattle",
@@ -163,6 +196,8 @@ def full_settings(**kw) -> Settings:
         wiki_interests=["linguistics"],
         homelab_feeds=["http://news.test/rss"], homelab_topics=["homelab tour"],
         jobs=Service("http://jobs.test", "https://jobs.example"), jobs_token="jt",
+        grafana=Service("http://grafana.test", "https://telemetry.example"), grafana_token="gt",
+        ha=Service("http://ha.test", "https://ha.example"), ha_token="ht",
     )
     base.update(kw)
     return Settings(**base)
@@ -171,7 +206,8 @@ def full_settings(**kw) -> Settings:
 @pytest.fixture(autouse=True)
 def clear_caches():
     for c in (sources._news_cache, sources._nebula_cache, sources._inv_cache, sources._romm_total,
-              sources._homelab_cache, sources._jobs_cache, sources._gaps_cache):
+              sources._homelab_cache, sources._jobs_cache, sources._gaps_cache,
+              sources._telemetry_cache, sources._home_cache):
         c._data.clear()
 
 
@@ -522,6 +558,34 @@ def test_ideas_are_kept_and_listed(client):
     assert client.post("/api/ideas/999/status", json={"status": "done"}).status_code == 404
     assert client.get("/api/ideas?status=planned").json()["ideas"][0]["id"] == idea_id
     assert client.get("/api/ideas?status=new").json()["ideas"] == []
+
+
+def test_telemetry_alerts_first_then_trends(client):
+    card = client.get("/api/card/telemetry").json()
+    assert card["title"] == "Disk almost full" and card["label"] == "Lab health · firing alert"
+    assert card["blurb"] == "/mnt/6tb is 93% full" and card["url"] == "https://telemetry.example/alerting/list"
+    sources._telemetry_cache.put("alerts", [])
+    card = client.get("/api/card/telemetry").json()
+    assert card["title"] == "/mnt/6tb is 82% full" and card["label"] == "Lab health · Fullest disk"
+
+
+@pytest.mark.anyio
+async def test_home_solar_from_lifetime_counters():
+    from datetime import datetime, timedelta, timezone
+    s = full_settings()
+    now = datetime(2026, 11, 17, 14, 0, tzinfo=timezone(timedelta(hours=-8)))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fake_backend)) as hc:
+        cards = {}
+        for seed in range(12):
+            c = await sources.home(hc, s, random.Random(seed), now=now)
+            cards[c.label] = c
+    solar = cards["Home · solar"]
+    # 12.300 MWh now - 12.288 at midnight = 12 kWh today; 12.288 - 12.270 = 18 kWh yesterday.
+    assert solar.title == "12.0 kWh of sun so far today"
+    assert "Yesterday: 18.0 kWh." in solar.blurb and "used 5.0 kWh" in solar.blurb and "surplus of 7.0" in solar.blurb
+    assert solar.subtitle == "Producing 2100 W right now"
+    assert solar.url == "https://ha.example/energy" and solar.actions[0]["url"] == "homeassistant://navigate/energy"
+    assert cards["Home · weather"].title == "48°F and partlycloudy outside"
 
 
 def test_phrase_cards():
