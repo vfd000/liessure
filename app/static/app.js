@@ -4,7 +4,7 @@
 const LABELS = {
   wikipedia: "Wikipedia", news: "News", game: "Games", video: "Videos", movie: "Movies",
   show: "Series", song: "Music", photo: "Photos", language: "Telugu", homelab: "Home lab",
-  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers", kquiz: "K-drama", trivia: "Jeopardy!",
+  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers", kquiz: "K-drama", trivia: "Jeopardy!", session: "Claude sessions",
 };
 const android = window.LiessureAndroid || null; // injected by the Android app
 // The page's own words in the reader's language (/api/me's lang); cards carry their own.
