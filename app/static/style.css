@@ -118,6 +118,10 @@ body {
 .lyrics { max-height: 260px; overflow-y: auto; margin: 10px 0; padding: 4px 2px; position: relative; }
 .lyrics .lyric { margin: 4px 0; opacity: .75; cursor: pointer; transition: opacity .2s; }
 .lyrics .lyric.now { opacity: 1; font-weight: 600; }
+.podcast-bar { position: fixed; left: 8px; right: 8px; bottom: calc(10px + env(safe-area-inset-bottom)); z-index: 20;
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px;
+  background: var(--card, #222); box-shadow: 0 4px 18px rgba(0, 0, 0, .4); }
+.podcast-bar span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .signout { text-decoration: none; color: inherit; }
 .ideas { width: min(560px, calc(100vw - 32px)); border: 0; border-radius: 12px; padding: 16px;
   background: var(--card, #1c1f24); color: inherit; }

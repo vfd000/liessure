@@ -1958,4 +1958,18 @@ def test_song_lyrics_from_lrclib_when_jellyfin_has_none():
         assert c.get("/api/lyrics/abc12345").json() == r  # kept: LRCLIB asked once
         assert c.get("/api/lyrics/not-an-id!").status_code == 404
     assert asked == [("/api/get", {"artist_name": "Adele", "track_name": "Hello", "album_name": "25", "duration": "295"})]
+def test_listen_reads_the_article_not_just_the_card():
+    def backend(request):
+        if request.url.host == "en.wikipedia.org" and request.url.path == "/w/api.php":
+            assert request.url.params["titles"] == "Tolt River"
+            return httpx.Response(200, json={"query": {"pages": [{"extract": "The Tolt River is a tributary."}]}})
+        return fake_backend(request)
+    with make_client(full_settings(), handler=backend) as c:
+        r = c.post("/api/listen", json={"card": {"title": "Tolt River", "blurb": "short",
+                                                  "url": "https://en.wikipedia.org/wiki/Tolt_River"}}).json()
+        assert r == {"text": "Tolt River.\n\nThe Tolt River is a tributary.", "lang": "en"}
+        r = c.post("/api/listen", json={"card": {"title": "A headline", "subtitle": "Site", "blurb": "What happened.",
+                                                  "url": "https://news.example/x"}}).json()
+        assert r == {"text": "A headline.\n\nSite What happened.", "lang": "en"}
+        assert c.post("/api/listen", json={"card": {}}).status_code == 422
 
