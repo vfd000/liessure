@@ -56,6 +56,16 @@ def pick_kinds(weights: dict[str, int], available: dict[str, bool], n: int, rng:
     return picked
 
 
+def spread(cards: list[dict]) -> list[dict]:
+    """The same cards, in order as far as possible, but never two of a kind side by side when that can be
+    avoided (a card that came back empty can leave two songs touching)."""
+    rest, out = list(cards), []
+    while rest:
+        i = next((j for j, c in enumerate(rest) if not out or c["kind"] != out[-1]["kind"]), 0)
+        out.append(rest.pop(i))
+    return out
+
+
 class CardState(BaseModel):
     card: dict = Field(...)
     state: str = Field(pattern="^(done|later|)$")
@@ -641,6 +651,21 @@ def create_app(
         client = request.app.state.client
         cards = await asyncio.gather(*(one(client, k, rng, user) for k in plan))
         out = [c for c in cards if c]
+        # Kinds with nothing right now (trivia still downloading, exercise on Not now): one round of others instead,
+        # each placed where it doesn't sit next to a card of its own kind.
+        empty = {k for k, c in zip(plan, cards) if not c}
+        if empty and len(out) < len(plan):
+            more_plan = pick_kinds(settings.weights, {k: v and k not in empty for k, v in avail.items()},
+                                   len(plan) - len(out), rng)
+            for extra in await asyncio.gather(*(one(client, k, rng, user) for k in more_plan)):
+                if not extra:
+                    continue
+                spots = [i for i in range(len(out) + 1)
+                         if (i == 0 or out[i - 1]["kind"] != extra["kind"])
+                         and (i == len(out) or out[i]["kind"] != extra["kind"])]
+                if spots:
+                    out.insert(rng.choice(spots), extra)
+        out = spread(out)
         # Something always beats an empty screen.
         if not out and plan:
             fallback = await one(client, "wikipedia", rng, user)
