@@ -74,6 +74,8 @@ class Card:
     quiz: dict[str, Any] = field(default_factory=dict)
     # An exercise to mark Done or put off: {"id", "name", "area"}.
     exercise: dict[str, Any] = field(default_factory=dict)
+    # Something to Get (Jellyseerr): {"media": "movie"|"tv", "tmdb", "title"}.
+    request: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1854,7 +1856,8 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "kquiz": kquiz_card,
     "trivia": trivia_card,
     "session": session,
-    "exercise": bite,  # served by main.py (the Done log and Not now are per person)
+    "exercise": bite,
+    "recommend": bite,  # served by main.py (skips what this person has already seen)  # served by main.py (the Done log and Not now are per person)
     "flashcard": bite,  # served by main.py from the person's decks
 }
 
@@ -1885,6 +1888,7 @@ def configured(s: Settings) -> dict[str, bool]:
         "kquiz": True,  # only for readers learning Korean (main.kinds_for)
         "session": bool(s.sessions_url and s.sessions_token),
         "trivia": True,
-        "exercise": True,  # owner only; the Exercises list and the activity tracker are optional  # Jeopardy! clues, downloaded to the data volume on first use (jeopardy.py)
+        "exercise": True,
+        "recommend": bool(s.jellyseerr_url and s.jellyseerr_api_key and s.jellyfin.url and s.jellyfin_token),  # owner only; the Exercises list and the activity tracker are optional  # Jeopardy! clues, downloaded to the data volume on first use (jeopardy.py)
         "flashcard": True,  # only for people with flashcards due (main.kinds_for)
     }

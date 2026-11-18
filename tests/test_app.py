@@ -286,7 +286,7 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia", "session", "exercise"):
+        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia", "session", "exercise", "recommend"):
             continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
@@ -2042,4 +2042,36 @@ def test_views_endpoint_and_engagement_report():
         c.post("/api/card-state", json={"card": {"kind": "news", "ref": "x2", "title": "C"}, "state": "later"})
         e = c.get("/api/engagement").json()["kinds"]
         assert e["news"]["seen"] == 2 and e["news"]["engaged"] == 2 and "bogus" not in e
+
+
+def test_recommendations_from_jellyseerr_and_get_it():
+    from app import recommend
+    recommend._cache._data.clear()
+    requested = []
+
+    def backend(request):
+        u = request.url
+        if u.host == "jellyfin.test" and u.path == "/Items":
+            return httpx.Response(200, json={"Items": [
+                {"Name": "Severance", "Type": "Series", "ProviderIds": {"Tmdb": "95396"}},
+                {"Name": "No id", "Type": "Movie", "ProviderIds": {}}]})
+        if u.host == "seerr.test" and u.path == "/api/v1/tv/95396/recommendations":
+            assert request.headers["x-api-key"] == "sk"
+            return httpx.Response(200, json={"results": [
+                {"id": 1, "mediaType": "tv", "name": "Have it", "mediaInfo": {"status": 5}},
+                {"id": 2, "mediaType": "tv", "name": "Dark", "firstAirDate": "2017-12-01", "voteAverage": 8.4,
+                 "overview": "A missing child.", "posterPath": "/dark.jpg"}]})
+        if u.host == "seerr.test" and u.path == "/api/v1/request":
+            requested.append(json.loads(request.content))
+            return httpx.Response(201, json={"id": 77})
+        return fake_backend(request)
+    s = full_settings(jellyfin=Service("http://jellyfin.test", "https://jellyfin.example"), jellyfin_token="jt",
+                      jellyseerr_url="http://seerr.test", jellyseerr_api_key="sk")
+    with make_client(s, handler=backend) as c:
+        card = c.get("/api/card/recommend").json()
+        assert card["title"] == "Dark (2017)" and card["label"] == "Because you have Severance"
+        assert card["subtitle"] == "Series · 2017 · ★ 8.4" and card["image"].endswith("/dark.jpg")
+        assert card["request"] == {"media": "tv", "tmdb": 2, "title": "Dark"}
+        assert c.post("/api/recommend/get", json=card["request"]).json() == {"status": "requested", "id": 77}
+    assert requested == [{"mediaType": "tv", "mediaId": 2, "seasons": "all"}]
 

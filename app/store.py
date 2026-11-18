@@ -366,6 +366,13 @@ class Store:
                 (user, state, limit)).fetchall()
         return [{**json.loads(r["card"]), "due": r["due"]} for r in rows]
 
+    def shown_refs(self, user: str, kind: str, days: float = 60) -> set[str]:
+        """Refs of this kind the feed showed this person lately (any state): not to be offered again."""
+        with self._lock:
+            rows = self._db.execute("SELECT key FROM history WHERE user = ? AND key LIKE ? AND ts >= ?",
+                                    (user, kind + ":%", time.time() - days * 86400)).fetchall()
+        return {r["key"].split(":", 1)[1] for r in rows}
+
     def done_keys(self, user: str = "owner") -> set[str]:
         with self._lock:
             rows = self._db.execute("SELECT key FROM history WHERE user = ? AND state = 'done'", (user,)).fetchall()
