@@ -596,7 +596,18 @@ def create_app(
     async def card_state(request: Request, s: CardState):
         """Swiped: 'done' (off the feed, onto the Done list), 'later' (the Later list, and back in the feed on a
         spaced schedule), or '' to put it back to normal."""
-        store.set_state(s.card, s.state, request.state.user)
+        user = request.state.user
+        store.set_state(s.card, s.state, user)
+        # A to-do swiped to Done is checked off the To Do list (and unchecked if put back). The owner's only.
+        ref = str(s.card.get("ref") or "")
+        if (s.card.get("kind") == "todo" and user == auth.OWNER and ref.startswith("todo:") and ref[5:].isdigit()
+                and settings.lists.url and settings.lists_token and s.state in ("done", "")):
+            try:
+                await sources.set_todo_checked(request.app.state.client, settings, int(ref[5:]), s.state == "done")
+            except httpx.HTTPError as e:
+                log.warning("todo %s: %s", ref, e)
+                return {"checked": False, "error": f"the lists service didn't take it: {type(e).__name__}"}
+            return {"checked": s.state == "done"}
         return Response(status_code=204)
 
     @app.get("/api/lists/{state}")

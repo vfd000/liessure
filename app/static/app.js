@@ -27,6 +27,7 @@ const UI = {
     "No decks yet: make one or import one.": "Aún no hay mazos: crea o importa uno.", "Delete deck": "Borrar mazo",
     "cards": "tarjetas", "due": "pendientes", "Added.": "Añadida.", "Importing…": "Importando…",
     "Imported": "Importadas", "Couldn't import that": "No se pudo importar",
+    "Couldn't tick it off the To Do list": "No se pudo marcar en la lista",
     "Search cards you've seen": "Buscar tarjetas que ya viste", "Later": "Después", "Done": "Hecho",
     "Done ✓": "Hecho ✓", "Later ↻": "Después ↻", "Back again": "De nuevo", "empty": "vacío",
     "Back to the feed": "Volver al feed", "Remove from Later": "Quitar de Después", "Found": "Encontradas",
@@ -460,7 +461,10 @@ function enableSwipe(cardEl, c) {
       cardEl.style.opacity = "0";
       setTimeout(() => cardEl.remove(), 200);
       fetch("/api/card-state", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ card: { ...c, again: undefined, due: undefined }, state }) }).catch(() => {});
+        body: JSON.stringify({ card: { ...c, again: undefined, due: undefined }, state }) })
+        .then((r) => (r.status === 200 ? r.json() : null))
+        .then((j) => { if (j && j.error) alert(t("Couldn't tick it off the To Do list") + ": " + j.error); })
+        .catch(() => {});
     } else {
       cardEl.style.transition = "transform .15s, opacity .15s";
       cardEl.style.transform = "";

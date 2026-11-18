@@ -1629,6 +1629,15 @@ async def home(client: httpx.AsyncClient, s: Settings, rng: random.Random, now: 
 _todo_cache = _TTLCache(300)
 
 
+async def set_todo_checked(client: httpx.AsyncClient, s: Settings, item_id: int, checked: bool) -> None:
+    """Tick (or untick) one item on the To Do list: swiping its card to Done checks it off. The only write
+    Liessure makes to the lists service."""
+    r = await client.patch(f"{s.lists.url}/lists/{s.todo_list_id}/items/{item_id}", json={"checked": checked},
+                           headers={"Authorization": f"Bearer {s.lists_token}"})
+    r.raise_for_status()
+    _todo_cache._data.clear()  # so the item isn't served again from the cache
+
+
 async def todo_items(client: httpx.AsyncClient, s: Settings) -> list[dict[str, Any]]:
     hit = _todo_cache.get("items")
     if hit is None:

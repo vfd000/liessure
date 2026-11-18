@@ -1746,3 +1746,24 @@ def test_flashcards_decks_import_review_and_study():
         assert c.delete(f"/api/decks/{deck}").status_code == 204
         assert [d["name"] for d in c.get("/api/decks").json()["decks"]] == ["Spanish"]
 
+
+def test_swiping_a_todo_to_done_ticks_it_off():
+    patched = []
+
+    def backend(request):
+        if request.url.host == "lists.test" and request.method == "PATCH":
+            assert request.headers["authorization"] == "Bearer lt"
+            patched.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(200, json={})
+        return fake_backend(request)
+    s = full_settings(lists=Service("http://lists.test", "https://lists.example"), lists_token="lt")
+    todo = {"kind": "todo", "ref": "todo:7", "title": "Renew passport", "url": "https://lists.example/"}
+    with make_client(s, handler=backend) as c:
+        r = c.post("/api/card-state", json={"card": todo, "state": "done"})
+        assert r.status_code == 200 and r.json() == {"checked": True}
+        assert c.post("/api/card-state", json={"card": todo, "state": ""}).json() == {"checked": False}
+        assert c.post("/api/card-state", json={"card": todo, "state": "later"}).status_code == 204  # later: no tick
+        assert c.post("/api/card-state", json={"card": {"kind": "news", "ref": "x", "title": "t"},
+                                                "state": "done"}).status_code == 204
+    assert patched == [("/lists/6/items/7", {"checked": True}), ("/lists/6/items/7", {"checked": False})]
+
