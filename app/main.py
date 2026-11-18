@@ -293,6 +293,19 @@ def create_app(
                 _read_cache.pop(next(iter(_read_cache)))
         return Response(_read_cache[key], media_type="text/html", headers={"Cache-Control": "private, max-age=3600"})
 
+    @app.get("/api/job/{job_id}/description")
+    async def job_description(request: Request, job_id: int):
+        """A job card's full description, fetched when it's expanded. The owner's only, like job cards."""
+        if "job" not in kinds_for(request.state.user):
+            raise HTTPException(404)
+        if not (settings.jobs.url and settings.jobs_token):
+            raise HTTPException(409, "jobs service not configured")
+        try:
+            text = await sources.job_description(request.app.state.client, settings, job_id)
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"the jobs service didn't answer: {type(e).__name__}")
+        return {"text": text[:60000]}
+
     @app.post("/api/photo/{asset_id}/identify")
     async def identify(request: Request, asset_id: str):
         """What's in a photo: the household vision model, with the photo's date and place as hints."""

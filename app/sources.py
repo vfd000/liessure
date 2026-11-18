@@ -59,6 +59,8 @@ class Card:
     open_label: str = ""
     # Shown under a "Details" button: [{"label", "value"}] rows, and {"label", "url"} links.
     details: list[dict[str, str]] = field(default_factory=list)
+    # More text fetched when asked for: {"label", "url"} (a job's full description).
+    more: dict[str, str] = field(default_factory=dict)
     # A photo the page can ask about (Identify, Ask Claude): {"id", "when", "place", "lat", "lon"}.
     photo: dict[str, Any] = field(default_factory=dict)
     # Something to answer in place. Typed: {"answer", "tolerance", "hint", "solution"};
@@ -1077,8 +1079,15 @@ def job_card(s: Settings, j: dict[str, Any], due: bool = False) -> Card:
         blurb=_clip(blurb, 400),
         url=j.get("url") or _jobs_link(s, f"/job/{j['id']}"),
         actions=actions,
+        more={"label": "Description", "url": f"/api/job/{int(j['id'])}/description"},
         ref=str(j["id"]),
     )
+
+
+async def job_description(client: httpx.AsyncClient, s: Settings, job_id: int) -> str:
+    """The posting's full text, as the jobs service scraped it (shown as text, never as HTML)."""
+    j = await _jobs_get(client, s, f"/jobs/{job_id}")
+    return (j.get("jd_text") or "").strip()
 
 
 async def job(client: httpx.AsyncClient, s: Settings, rng: random.Random, today: date | None = None) -> Card:
