@@ -587,7 +587,7 @@ async def test_home_solar_from_lifetime_counters():
     assert "Yesterday: 18.0 kWh." in solar.blurb and "used 5.0 kWh" in solar.blurb and "surplus of 7.0" in solar.blurb
     assert solar.subtitle == "Producing 2100 W right now"
     assert solar.url == "https://ha.example/energy" and solar.actions[0]["url"] == "homeassistant://navigate/energy"
-    assert cards["Home · weather"].title == "48°F and partlycloudy outside"
+    assert cards["Home · weather"].title == "48°F and partly cloudy outside"
 
 
 def test_math_answers_are_exact_numbers():
