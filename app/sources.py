@@ -916,6 +916,11 @@ async def infosec(client: httpx.AsyncClient, s: Settings, rng: random.Random) ->
     raise Unavailable(f"infosec sources failed: {last}")
 
 
+async def bite(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    """Served by main.py from the curated pool; never called directly."""
+    raise Unavailable("bite-size cards come from the pool")
+
+
 # --------------------------------------------------------------------- jobs
 # The household jobs service (vfd000/jobs). Job descriptions are scraped web
 # text: they're shown as data and never reach the curator or the interest
@@ -1613,6 +1618,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "recall": recall,
     "todo": todo,
     "infosec": infosec,
+    "bite": bite,
 }
 
 
@@ -1636,4 +1642,5 @@ def configured(s: Settings) -> dict[str, bool]:
         "recall": bool(s.llm_url and s.llm_key),  # the curator writes the questions
         "todo": bool(s.lists.url and s.lists_token and s.llm_url and s.llm_key),
         "infosec": bool(s.phrack or s.infosec_feeds),
+        "bite": bool(s.llm_url and s.llm_key),  # the curator writes them
     }
