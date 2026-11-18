@@ -137,6 +137,13 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
         codec = "alac" if q["ids"] == "a1ac0001" else "flac"
         return httpx.Response(200, json={"Items": [{"Id": q["ids"], "MediaSources": [
             {"MediaStreams": [{"Type": "Audio", "Codec": codec}]}]}]})
+    if host == "jf.test" and (path == "/Shows/NextUp" or path.endswith("/Episodes")):
+        ep = {"Id": "e0e0e0e1", "ServerId": "srv", "Name": "Cat and Mouse", "SeriesName": "The Clone Wars",
+              "SeriesId": "abc12345", "ParentIndexNumber": 2, "IndexNumber": 16, "Overview": "A blockade.",
+              "ImageTags": {"Primary": "t"}}
+        if path == "/Shows/NextUp" and not q.get("seriesId"):
+            ep = {**ep, "Id": "e0e0e0e2", "Name": "Hunted", "IndexNumber": 17}
+        return httpx.Response(200, json={"Items": [ep]})
     if host == "jf.test" and (path == "/Items" or path.endswith("/Similar")):
         assert "Token=\"jft\"" in request.headers["authorization"]
         t = q.get("IncludeItemTypes", "Audio")
@@ -1251,4 +1258,16 @@ def test_audio_streams_the_file_when_the_browser_can_play_it():
         assert c.get("/stream/audio/a1ac0001").status_code == 200
     assert calls[0] == ("/Audio/abc12345/stream", {"static": "true"})  # whole file: a length, so seeking works
     assert calls[1][0] == "/Audio/a1ac0001/universal" and calls[1][1]["AudioCodec"] == "mp3"
+
+
+def test_series_cards_are_specific_episodes(client):
+    titles = {}
+    for _ in range(25):
+        c = client.get("/api/card/show").json()
+        titles[c["label"]] = c
+    ep = titles["Episode on Jellyfin"]
+    assert ep["title"] == "Cat and Mouse" and ep["subtitle"].startswith("The Clone Wars · S2E16")
+    assert ep["url"] == "https://jellyfin.example/web/#/details?id=e0e0e0e1&serverId=srv" and ep["open_in_app"]
+    assert ep["image"].endswith("%2FItems%2Fe0e0e0e1%2FImages%2FPrimary%3FmaxWidth%3D720%26quality%3D85")
+    assert titles["Next up on Jellyfin"]["title"] == "Hunted"
 
