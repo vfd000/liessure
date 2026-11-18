@@ -28,6 +28,8 @@ const UI = {
     "cards": "tarjetas", "due": "pendientes", "Added.": "Añadida.", "Importing…": "Importando…",
     "Imported": "Importadas", "Couldn't import that": "No se pudo importar",
     "Couldn't tick it off the To Do list": "No se pudo marcar en la lista",
+    "Listen": "Escuchar", "Stop": "Parar", "Skip": "Saltar", "Loading…": "Cargando…", "Starting…": "Empezando…",
+    "Nothing more to read right now.": "No hay más para leer ahora.",
     "To do": "Pendiente", "Study further": "Estudiar más", "Implement": "Implementar",
     "On the To Do list": "En la lista", "Couldn't add it to the To Do list": "No se pudo añadir a la lista",
     "What is…?": "¿Qué es…?", "Not quite. Try again, or show the answer.": "Casi. Inténtalo otra vez o mira la respuesta.",
@@ -114,6 +116,7 @@ function openUrl(url, inApp) {
 
 function renderCard(c) {
   const card = el("article", "card " + c.kind);
+  card.card = c; // podcast mode finds the readable cards on the page
   if (c.image) {
     const img = el("img", "media");
     img.loading = "lazy";
@@ -252,6 +255,7 @@ function renderCard(c) {
     actions.append(mapBtn);
   }
   if (c.kind === "song" && c.ref) actions.append(lyricsButton(c, card, body, actions));
+  if (LISTENS.has(c.kind)) actions.append(listenButton(c));
   if (CAN_TODO && c.kind !== "todo" && c.title) {
     // Onto the To Do list: to read up on it, or to build it.
     const td = el("button", "", "＋ " + t("To do"));
@@ -698,6 +702,122 @@ function lyricsButton(c, cardEl, body, actions) {
   };
   return b;
 }
+
+// ------------------------------------------------------------------ listening
+// Read a card aloud: Android's text-to-speech in the app (speakLong, which says when it's done), the
+// browser's voices elsewhere (in sentence-sized pieces: long utterances stall in some browsers).
+const LISTENS = new Set(["wikipedia", "news", "bite", "infosec", "homelab", "career"]);
+const spoken = {}; // utterance id -> callback when the phone finishes it
+window.liessureSpoken = (id, ok) => { const f = spoken[id]; delete spoken[id]; if (f) f(ok !== false); };
+let speakSeq = 0;
+
+function speakLong(text, lang, done) {
+  stopSpeaking();
+  const id = "u" + (++speakSeq);
+  spoken[id] = done || (() => {});
+  if (android && android.speakLong) { android.speakLong(text, lang || "en", id); return id; }
+  const synth = window.speechSynthesis;
+  if (!synth) { setTimeout(() => window.liessureSpoken(id, false)); return id; }
+  const base = (lang || "en").split("-")[0];
+  const voice = synth.getVoices().find((v) => v.lang.split("-")[0] === base && v.localService) ||
+    synth.getVoices().find((v) => v.lang.split("-")[0] === base);
+  const pieces = text.replace(/\s+\n/g, "\n").match(/[^.!?\n]+[.!?]*\s*|\n+/g) || [text];
+  const chunks = [];
+  for (const p of pieces) {
+    if (chunks.length && (chunks[chunks.length - 1] + p).length < 220) chunks[chunks.length - 1] += p;
+    else if (p.trim()) chunks.push(p);
+  }
+  chunks.forEach((ch, i) => {
+    const u = new SpeechSynthesisUtterance(ch);
+    if (voice) { u.voice = voice; u.lang = voice.lang; } else u.lang = lang || "en";
+    if (i === chunks.length - 1) u.onend = () => window.liessureSpoken(id, true);
+    u.onerror = (e) => { if (e.error !== "interrupted" && e.error !== "canceled") window.liessureSpoken(id, false); };
+    synth.speak(u);
+  });
+  return id;
+}
+
+function stopSpeaking() {
+  for (const k of Object.keys(spoken)) delete spoken[k];
+  if (android && android.stopSpeaking) android.stopSpeaking();
+  else if (window.speechSynthesis) window.speechSynthesis.cancel();
+}
+
+async function listenText(c) {
+  const r = await fetch("/api/listen", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ card: { title: c.title, subtitle: c.subtitle, blurb: c.blurb, url: c.url } }) });
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+let listening = null; // the Listen button that's playing, so starting another stops it
+
+function listenButton(c) {
+  const b = el("button", "", "🔊 " + t("Listen"));
+  const idle = () => { b.textContent = "🔊 " + t("Listen"); b.disabled = false; if (listening === b) listening = null; };
+  b.onclick = async () => {
+    if (listening === b) { stopSpeaking(); idle(); return; }
+    if (listening) listening.stop();
+    stopPodcast();
+    listening = b;
+    b.stop = idle;
+    b.textContent = t("Loading…");
+    try {
+      const { text, lang } = await listenText(c);
+      if (listening !== b) return;
+      b.textContent = "⏹ " + t("Stop");
+      report(c, "play");
+      speakLong(text, lang, idle);
+    } catch { idle(); }
+  };
+  return b;
+}
+
+// Podcast mode: read the feed's readable cards one after another, scrolling to each; Stop ends it.
+let podcast = null;
+
+function stopPodcast() {
+  if (!podcast) return;
+  podcast.bar.remove();
+  podcast = null;
+  stopSpeaking();
+}
+
+async function podcastNext() {
+  if (!podcast) return;
+  const run = podcast;
+  let cardEl = null;
+  for (let tries = 0; tries < 3 && !cardEl; tries++) {
+    cardEl = [...feed.querySelectorAll(".card")].find((x) => x.card && LISTENS.has(x.card.kind) && !run.done.has(x));
+    if (!cardEl) { await load(); if (podcast !== run) return; }
+  }
+  if (!cardEl) { run.status.textContent = t("Nothing more to read right now."); return; }
+  run.done.add(cardEl);
+  const c = cardEl.card;
+  cardEl.scrollIntoView({ behavior: "smooth", block: "start" });
+  run.status.textContent = `🎧 ${c.title}`;
+  let text = c.title, lang = "en";
+  try { ({ text, lang } = await listenText(c)); } catch {}
+  if (podcast !== run) return;
+  report(c, "play");
+  speakLong(`${c.label || ""}. ${text}`, lang, (ok) => { if (podcast === run) setTimeout(podcastNext, ok ? 800 : 300); });
+}
+
+function startPodcast() {
+  if (podcast) { stopPodcast(); return; }
+  if (listening) listening.stop();
+  const bar = el("div", "podcast-bar");
+  const status = el("span", "", t("Starting…"));
+  const skip = el("button", "chip", "⏭ " + t("Skip"));
+  const stop = el("button", "chip", "⏹ " + t("Stop"));
+  skip.onclick = () => { stopSpeaking(); podcastNext(); };
+  stop.onclick = stopPodcast;
+  bar.append(status, skip, stop);
+  document.body.append(bar);
+  podcast = { bar, status, done: new Set() };
+  podcastNext();
+}
+document.getElementById("podcast").onclick = startPodcast;
 
 // Hand a photo to Claude: the Claude app (Android share), the share sheet (iPhone, other
 // browsers), or a text-only new chat when sharing a file isn't possible.

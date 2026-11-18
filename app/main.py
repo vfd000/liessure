@@ -79,6 +79,10 @@ class CardToTodo(BaseModel):
     why: str = Field(pattern="^(study|implement)$")
 
 
+class ListenTo(BaseModel):
+    card: dict = Field(...)
+
+
 class RouteFor(BaseModel):
     card: dict = Field(...)
 
@@ -712,6 +716,33 @@ def create_app(
             log.warning("todo from card: %s", e)
             raise HTTPException(502, f"the lists service didn't take it: {type(e).__name__}")
         return {"id": item.get("id"), "text": item.get("text")}
+
+    @app.post("/api/listen")
+    async def listen(request: Request, body: ListenTo):
+        """What to read aloud for a card: a Wikipedia article's opening, a Phrack article's prose, or else the
+        card's own words. Spoken by the phone (Android's text-to-speech, or the browser's voices)."""
+        c = body.card
+        title = " ".join(str(c.get("title") or "").split())[:300]
+        url = str(c.get("url") or "")
+        own = " ".join(" ".join(str(c.get(k) or "").split()) for k in ("subtitle", "blurb") if c.get(k))
+        lang = "en"
+        text = ""
+        client = request.app.state.client
+        try:
+            m = re.match(r"https://([a-z-]+)\.(?:m\.)?wikipedia\.org/wiki/", url)
+            if m:
+                lang = m.group(1)
+                text = await curator.wikipedia_opening(client, url, chars=6000)
+            m = re.search(r"/read/phrack/(\d+)/([\w.-]+)$", url)
+            if m:
+                _, parts = reader.blocks(await reader.fetch_text(client, int(m.group(1)), m.group(2)))
+                text = "\n\n".join(t for kind, t in parts if kind != "pre")[:20000]  # code isn't for listening
+        except (httpx.HTTPError, ValueError) as e:
+            log.info("listen %r: %s", title, e)
+        text = text or own
+        if not text.strip() and not title:
+            raise HTTPException(422, "nothing to read")
+        return {"text": f"{title}.\n\n{text}".strip(), "lang": lang}
 
     @app.post("/api/geo/route")
     async def geo_route(request: Request, body: RouteFor):
