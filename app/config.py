@@ -34,7 +34,17 @@ DEFAULT_WEIGHTS = {
     "photo": 3,
     "language": 3,
     "news": 2,
+    "homelab": 2,
+    "job": 1,
+    "skill": 1,
 }
+
+# Kinds shown at most this many times per feed load. The feed is a break,
+# not a work queue.
+MAX_PER_LOAD = {"job": 1, "skill": 1}
+
+# Kinds whose titles never go to the LLM as evidence of what you like.
+UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home"})
 
 KINDS = tuple(DEFAULT_WEIGHTS)
 
@@ -59,6 +69,27 @@ DEFAULT_PROFILE = (
 DEFAULT_INTERESTS = (
     "self-hosting|computer networking|Pacific Northwest geology|backpacking"
     "|history of video games|linguistics|Telugu language|Mandarin Chinese"
+)
+
+# The tech in the home lab (Wikipedia article titles) and where home-lab
+# design and builds get written up.
+DEFAULT_HOMELAB_STACK = (
+    "Proxmox Virtual Environment|ZFS|LXC|Docker (software)|Jellyfin|Immich|Home Assistant|Z-Wave"
+    "|Nginx|Let's Encrypt|Mutual authentication|WireGuard|Ansible (software)|Grafana"
+    "|Prometheus (software)|Linux Unified Key Setup|Ubiquiti|Pi-hole|1Password|RAID"
+    "|Uninterruptible power supply|Power over Ethernet|Network-attached storage|Single sign-on"
+)
+DEFAULT_HOMELAB_FEEDS = (
+    "https://www.servethehome.com/feed/"
+    "|https://selfh.st/rss/"
+    "|https://www.jeffgeerling.com/blog.xml"
+    "|https://noted.lol/rss/"
+    "|https://www.lawrencesystems.com/feed/"
+    "|https://www.home-assistant.io/atom.xml"
+)
+DEFAULT_HOMELAB_TOPICS = (
+    "homelab tour|home server rack build|homelab network design|proxmox homelab setup"
+    "|self-hosted apps|home lab power efficiency|10 gigabit home network"
 )
 
 # "Name:wikipedia-code" pairs.
@@ -191,6 +222,16 @@ class Settings:
     languages_fluent: list[tuple[str, str]] = field(default_factory=lambda: parse_langs(DEFAULT_FLUENT))
     language_practice_url: str = ""
 
+    homelab_stack: list[str] = field(default_factory=lambda: parse_list(DEFAULT_HOMELAB_STACK))
+    homelab_feeds: list[str] = field(default_factory=list)
+    homelab_topics: list[str] = field(default_factory=list)
+    homelab_max_age_days: float = 30
+
+    # The household jobs service (vfd000/jobs): JOBS_TOKEN is its MCP_API_TOKEN.
+    jobs: Service = field(default_factory=Service)
+    jobs_token: str = ""
+    jobs_min_score: int = 70
+
     @classmethod
     def from_env(cls) -> "Settings":
         def svc(prefix: str) -> Service:
@@ -251,6 +292,13 @@ class Settings:
             languages_curious=parse_langs(_env("LANGUAGES_CURIOUS", DEFAULT_CURIOUS)),
             languages_fluent=parse_langs(_env("LANGUAGES_FLUENT", DEFAULT_FLUENT)),
             language_practice_url=_strip(_env("LANGUAGE_PRACTICE_URL")),
+            homelab_stack=parse_list(_env("HOMELAB_STACK", DEFAULT_HOMELAB_STACK)),
+            homelab_feeds=parse_list(_env("HOMELAB_FEEDS", DEFAULT_HOMELAB_FEEDS)),
+            homelab_topics=parse_list(_env("HOMELAB_TOPICS", DEFAULT_HOMELAB_TOPICS)),
+            homelab_max_age_days=float(_env("HOMELAB_MAX_AGE_DAYS", "30")),
+            jobs=svc("JOBS"),
+            jobs_token=_env("JOBS_TOKEN"),
+            jobs_min_score=int(_env("JOBS_MIN_SCORE", "70")),
         )
 
 

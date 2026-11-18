@@ -54,6 +54,27 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
             "thumbnail": {"source": "https://upload.wikimedia.org/x.jpg"},
             "content_urls": {"mobile": {"page": f"https://{host.split('.')[0]}.m.wikipedia.org/wiki/Lighthouse"}},
         })
+    if host.endswith("wikipedia.org") and path.startswith("/api/rest_v1/page/summary/"):
+        title = path.rsplit("/", 1)[1].replace("_", " ")
+        return httpx.Response(200, json={
+            "type": "standard", "title": title, "description": "software", "extract": f"{title} is software. " * 10,
+            "content_urls": {"mobile": {"page": f"https://{host.split('.')[0]}.m.wikipedia.org/wiki/{title}"}},
+        })
+    if host == "jobs.test" and path.startswith("/api/"):
+        assert request.headers["authorization"] == "Bearer jt"
+        job = lambda n, **kw: {"id": n, "title": f"Security Engineer {n}", "company": f"Co{n}", "location": "Seattle",
+                               "workplace": "hybrid", "salary": "$200k", "score": 80 + n, "status": "new",
+                               "summary": "Good fit.", "url": f"https://jobs.example/#/job/{n}",
+                               "posting_url": f"https://boards.example/{n}", **kw}
+        if path == "/api/jobs":
+            return httpx.Response(200, json=[job(1), job(2), job(3, status="applied")])
+        if path.startswith("/api/jobs/"):
+            n = int(path.rsplit("/", 1)[1])
+            gaps = ["Kubernetes in production", "Go"] if n != 2 else ["kubernetes in production!"]
+            return httpx.Response(200, json={**job(n), "score_detail": {"gaps": gaps}})
+        if path == "/api/pipeline":
+            return httpx.Response(200, json={"board": {"interviewing": [
+                job(9, status="interviewing", next_step="Onsite loop", next_step_on="2026-11-18T09:00:00")]}})
     if host.endswith("wikipedia.org") and path == "/w/api.php":
         gen = q["generator"]
         lang = host.split(".")[0]
@@ -140,6 +161,8 @@ def full_settings(**kw) -> Settings:
         nebula_feeds=["http://news.test/nebula"],
         travel=Service("http://travel.test"), travel_token="tt",
         wiki_interests=["linguistics"],
+        homelab_feeds=["http://news.test/rss"], homelab_topics=["homelab tour"],
+        jobs=Service("http://jobs.test", "https://jobs.example"), jobs_token="jt",
     )
     base.update(kw)
     return Settings(**base)
@@ -147,7 +170,8 @@ def full_settings(**kw) -> Settings:
 
 @pytest.fixture(autouse=True)
 def clear_caches():
-    for c in (sources._news_cache, sources._nebula_cache, sources._inv_cache, sources._romm_total):
+    for c in (sources._news_cache, sources._nebula_cache, sources._inv_cache, sources._romm_total,
+              sources._homelab_cache, sources._jobs_cache, sources._gaps_cache):
         c._data.clear()
 
 
@@ -210,9 +234,76 @@ def test_song_offers_music_app(client):
 
 def test_feed(client):
     r = client.get("/api/feed?n=10").json()
-    assert len(r["cards"]) == 10
     kinds = [c["kind"] for c in r["cards"]]
+    assert len(kinds) >= 9  # a weekend drops the one job card
     assert all(a != b for a, b in zip(kinds, kinds[1:]))
+    assert kinds.count("job") <= 1 and kinds.count("skill") <= 1
+
+
+def test_job_and_skill_cards_are_capped_per_load():
+    w = {k: 0 for k in parse_weights("")} | {"job": 9, "skill": 9, "wikipedia": 1}
+    avail = {k: True for k in w}
+    for seed in range(20):
+        picked = pick_kinds(w, avail, 8, random.Random(seed))
+        assert picked.count("job") <= 1 and picked.count("skill") <= 1 and len(picked) == 8
+    assert pick_kinds({"job": 5}, {"job": True}, 6, random.Random(1)) == ["job"]
+
+
+def test_homelab_cards():
+    with make_client(full_settings()) as c:
+        labels = {c.get("/api/card/homelab").json()["label"] for _ in range(30)}
+    assert "Home lab · in your stack" in labels and "Home lab · video" in labels
+    assert "Home lab · Test Wire" in labels
+
+
+@pytest.mark.anyio
+async def test_job_cards_respect_weekends_and_due_steps():
+    s = full_settings()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fake_backend)) as hc:
+        # Monday, onsite on Wednesday (> 2 days): a new match, never the applied one.
+        for seed in range(10):
+            card = await sources.job(hc, s, random.Random(seed), today=date(2026, 11, 9))
+            assert card.label == "Job · new match" and card.ref in ("1", "2")
+            assert card.url == f"https://jobs.example/#/job/{card.ref}"
+            assert {"label": "Posting", "url": f"https://boards.example/{card.ref}"} in card.actions
+        sources._jobs_cache._data.clear()
+        # Saturday with nothing due: no job card at all.
+        with pytest.raises(sources.Unavailable):
+            await sources.job(hc, s, random.Random(1), today=date(2026, 11, 7))
+        sources._jobs_cache._data.clear()
+        # Sunday the 15th... onsite the 18th is 3 days out: still nothing. Monday the 16th: the due step can show.
+        with pytest.raises(sources.Unavailable):
+            await sources.job(hc, s, random.Random(1), today=date(2026, 11, 15))
+        sources._jobs_cache._data.clear()
+        labels = {(await sources.job(hc, s, random.Random(n), today=date(2026, 11, 16))).label for n in range(12)}
+        assert labels == {"Job · new match", "Job · next step due"}
+
+
+def test_skill_cards_rank_gaps_across_jobs(client):
+    card = client.get("/api/card/skill").json()
+    assert card["kind"] == "skill" and card["url"] == "https://jobs.example/#/career"
+    gaps = {client.get("/api/card/skill").json()["title"].casefold().rstrip("!") for _ in range(20)}
+    assert gaps <= {"kubernetes in production", "go"}
+    k8s = next(c for c in (client.get("/api/card/skill").json() for _ in range(30)) if c["title"].startswith("Kub"))
+    assert k8s["subtitle"] == "3 of your top matches ask for this"
+    assert k8s["embed"]["src"].startswith("https://watch.example/embed/")
+
+
+def test_job_titles_never_reach_interest_proposals():
+    store = Store(":memory:")
+    for n in range(10):
+        store.record("job", str(n), "open", f"Staff Engineer at Acme {n}")
+    store.record("wikipedia", "Lighthouse", "open", "Lighthouse")
+    seen = {}
+
+    async def ask(client, s, prompt, system=None):
+        seen["prompt"] = prompt
+        return "{}"
+    import asyncio
+    from app import profile as profile_mod
+    s = full_settings(graph=Service("http://graph.test"), graph_token="g")
+    asyncio.run(profile_mod.propose_interests(None, s, store, profile_mod.ProfileCache(s), ask))
+    assert "Acme" not in seen.get("prompt", "")
 
 
 def test_feed_filter(client):
@@ -232,7 +323,7 @@ def test_unconfigured_sources_are_skipped():
         s = c.get("/api/sources").json()["sources"]
         assert s["wikipedia"]["configured"] and not s["movie"]["configured"]
         cards = c.get("/api/feed?n=6").json()["cards"]
-        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language"}
+        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language", "homelab"}
 
 
 def test_weights_and_pick():

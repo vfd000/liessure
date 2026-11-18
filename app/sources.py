@@ -601,24 +601,30 @@ def parse_feed(body: bytes) -> list[dict[str, Any]]:
     return [i for i in out if i["title"] and i["url"].startswith("http")]
 
 
-async def news_items(client: httpx.AsyncClient, s: Settings) -> list[dict[str, Any]]:
-    """Recent items across all feeds, cached for half an hour."""
-    hit = _news_cache.get("all")
+async def feed_items(client: httpx.AsyncClient, urls: list[str], max_age_hours: float,
+                     cache: _TTLCache) -> list[dict[str, Any]]:
+    """Recent items across several RSS/Atom feeds, cached."""
+    hit = cache.get("all")
     if hit is not None:
         return hit
-    results = await asyncio.gather(*(client.get(u) for u in s.news_feeds), return_exceptions=True)
-    cutoff = time.time() - s.news_max_age_hours * 3600
+    results = await asyncio.gather(*(client.get(u) for u in urls), return_exceptions=True)
+    cutoff = time.time() - max_age_hours * 3600
     items: list[dict[str, Any]] = []
-    for url, r in zip(s.news_feeds, results):
+    for url, r in zip(urls, results):
         try:
             if isinstance(r, Exception):
                 raise r
             r.raise_for_status()
             items += [i for i in parse_feed(r.content) if i["ts"] is None or i["ts"] >= cutoff]
         except (httpx.HTTPError, ElementTree.ParseError) as e:
-            log.warning("news feed %s failed: %s", url, e)
-    _news_cache.put("all", items)
+            log.warning("feed %s failed: %s", url, e)
+    cache.put("all", items)
     return items
+
+
+async def news_items(client: httpx.AsyncClient, s: Settings) -> list[dict[str, Any]]:
+    """Recent items across all news feeds, cached for half an hour."""
+    return await feed_items(client, s.news_feeds, s.news_max_age_hours, _news_cache)
 
 
 def news_card(item: dict[str, Any]) -> Card:
@@ -726,6 +732,209 @@ async def language(client: httpx.AsyncClient, s: Settings, rng: random.Random) -
     raise Unavailable(f"language sources failed: {last}")
 
 
+# ------------------------------------------------------------------ homelab
+
+_homelab_cache = _TTLCache(3 * 3600)
+
+
+async def _wiki_summary(client: httpx.AsyncClient, lang: str, title: str) -> dict[str, Any]:
+    r = await client.get(f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{quote(title.replace(' ', '_'), safe='')}")
+    r.raise_for_status()
+    return r.json()
+
+
+async def homelab(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    """Home-lab design (builds, tours, write-ups) and the tech that runs in yours."""
+    options: list[tuple[Callable[[], Awaitable[Card]], int]] = []
+
+    if s.homelab_stack:
+        async def stack() -> Card:
+            data = await _wiki_summary(client, s.wikipedia_lang, rng.choice(s.homelab_stack))
+            if data.get("type") == "disambiguation":
+                raise Unavailable("stack topic is a disambiguation page")
+            return _wiki_card(data, "homelab", "Home lab · in your stack")
+        options.append((stack, 4))
+
+    if s.homelab_feeds:
+        async def feed() -> Card:
+            items = await feed_items(client, s.homelab_feeds, s.homelab_max_age_days * 24, _homelab_cache)
+            if not items:
+                raise Unavailable("home-lab feeds had nothing recent")
+            item = rng.choice(items)
+            card = news_card(item)
+            card.kind, card.label = "homelab", f"Home lab · {item['source']}" if item.get("source") else "Home lab"
+            return card
+        options.append((feed, 3))
+
+    if s.invidious.url and s.homelab_topics:
+        async def vid() -> Card:
+            return _video_card(s, await _random_video(client, s, rng, s.homelab_topics), "homelab", "Home lab · video")
+        options.append((vid, 3))
+
+    if not options:
+        raise Unavailable("no home-lab sources")
+    last: Exception | None = None
+    for _ in range(2):
+        fn = rng.choices([o for o, _ in options], weights=[w for _, w in options])[0]
+        try:
+            return await fn()
+        except (Unavailable, httpx.HTTPError, KeyError, ValueError) as e:
+            last = e
+    raise Unavailable(f"home-lab sources failed: {last}")
+
+
+# --------------------------------------------------------------------- jobs
+# The household jobs service (vfd000/jobs). Job descriptions are scraped web
+# text: they're shown as data and never reach the curator or the interest
+# proposals (see profile.UNCURATED_KINDS).
+
+_jobs_cache = _TTLCache(1800)
+_gaps_cache = _TTLCache(6 * 3600)
+
+
+def _jobs_headers(s: Settings) -> dict[str, str]:
+    return {"Authorization": f"Bearer {s.jobs_token}"}
+
+
+async def _jobs_get(client: httpx.AsyncClient, s: Settings, path: str, **params: Any) -> Any:
+    r = await client.get(f"{s.jobs.url}/api{path}", params=params, headers=_jobs_headers(s))
+    r.raise_for_status()
+    return r.json()
+
+
+def _jobs_link(s: Settings, path: str) -> str:
+    return f"{s.jobs.link_base}/#{path}"
+
+
+async def _top_jobs(client: httpx.AsyncClient, s: Settings) -> list[dict[str, Any]]:
+    hit = _jobs_cache.get("top")
+    if hit is None:
+        hit = await _jobs_get(client, s, "/jobs", status="active", min_score=s.jobs_min_score, limit=30)
+        _jobs_cache.put("top", hit)
+    return hit
+
+
+async def _due_steps(client: httpx.AsyncClient, s: Settings, today: date) -> list[dict[str, Any]]:
+    """Applications whose next step is due within two days (or overdue)."""
+    hit = _jobs_cache.get("pipeline")
+    if hit is None:
+        hit = await _jobs_get(client, s, "/pipeline")
+        _jobs_cache.put("pipeline", hit)
+    due = []
+    for col in ("shortlisted", "applied", "interviewing", "offer"):
+        for j in (hit.get("board") or {}).get(col) or []:
+            when = (j.get("next_step_on") or "")[:10]
+            if j.get("next_step") and when and (date.fromisoformat(when) - today).days <= 2:
+                due.append(j)
+    return due
+
+
+def job_card(s: Settings, j: dict[str, Any], due: bool = False) -> Card:
+    where = j.get("location") or ""
+    if j.get("workplace") and j["workplace"].lower() not in where.lower():
+        where = f"{where} ({j['workplace']})" if where else j["workplace"]
+    sub = " · ".join(x for x in (j.get("company"), where, j.get("salary")) if x)
+    if due:
+        blurb = f"Next step: {j['next_step']} (due {j['next_step_on'][:10]})."
+    else:
+        blurb = j.get("summary") or ""
+        if j.get("score") is not None:
+            blurb = f"Match {j['score']}. {blurb}".strip()
+    actions = []
+    if j.get("posting_url"):
+        actions.append({"label": "Posting", "url": j["posting_url"]})
+    return Card(
+        kind="job",
+        label="Job · next step due" if due else "Job · new match",
+        title=j.get("title") or "A job",
+        subtitle=sub,
+        blurb=_clip(blurb, 400),
+        url=j.get("url") or _jobs_link(s, f"/job/{j['id']}"),
+        actions=actions,
+        ref=str(j["id"]),
+    )
+
+
+async def job(client: httpx.AsyncClient, s: Settings, rng: random.Random, today: date | None = None) -> Card:
+    """A top-ranked new opening, or an application with a step due. The feed is
+    a break, not a work queue: weekends only show a due step."""
+    if not (s.jobs.url and s.jobs_token):
+        raise Unavailable("jobs service not configured")
+    today = today or date.today()
+    due = await _due_steps(client, s, today)
+    if due and rng.random() < 0.5:
+        return job_card(s, rng.choice(due), due=True)
+    if today.weekday() >= 5:
+        if due:
+            return job_card(s, rng.choice(due), due=True)
+        raise Unavailable("no job cards on weekends")
+    fresh = [j for j in await _top_jobs(client, s) if j.get("status") == "new"]
+    if fresh:
+        return job_card(s, rng.choice(fresh[:10]))
+    if due:
+        return job_card(s, rng.choice(due), due=True)
+    raise Unavailable("no new matches")
+
+
+def _gap_key(gap: str) -> str:
+    return " ".join(re.sub(r"[^\w+#. ]", " ", gap.casefold()).split())
+
+
+async def skill_gaps(client: httpx.AsyncClient, s: Settings) -> list[dict[str, Any]]:
+    """What the top jobs ask for that the resume doesn't show, most asked first:
+    [{gap, jobs: [{id, title, company}]}]."""
+    hit = _gaps_cache.get("all")
+    if hit is not None:
+        return hit
+    top = (await _top_jobs(client, s))[:12]
+    full = await asyncio.gather(*(_jobs_get(client, s, f"/jobs/{j['id']}") for j in top), return_exceptions=True)
+    by_key: dict[str, dict[str, Any]] = {}
+    for j in full:
+        if isinstance(j, Exception):
+            continue
+        for gap in ((j.get("score_detail") or {}).get("gaps") or [])[:5]:
+            if not isinstance(gap, str) or not gap.strip():
+                continue
+            entry = by_key.setdefault(_gap_key(gap), {"gap": gap.strip(), "jobs": []})
+            entry["jobs"].append({"id": j["id"], "title": j.get("title") or "", "company": j.get("company") or ""})
+    gaps = sorted(by_key.values(), key=lambda g: -len(g["jobs"]))
+    _gaps_cache.put("all", gaps)
+    return gaps
+
+
+async def skill(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    """Something to learn that the jobs you'd want keep asking for."""
+    if not (s.jobs.url and s.jobs_token):
+        raise Unavailable("jobs service not configured")
+    gaps = await skill_gaps(client, s)
+    if not gaps:
+        raise Unavailable("no skill gaps recorded")
+    g = rng.choices(gaps[:15], weights=[len(x["jobs"]) for x in gaps[:15]])[0]
+    n = len(g["jobs"])
+    asked = "; ".join(f"{j['title']} at {j['company']}" for j in g["jobs"][:3])
+    topic = " ".join(g["gap"].split()[:8])
+    card = Card(
+        kind="skill",
+        label="Learn · for the jobs you want",
+        title=g["gap"],
+        subtitle=f"{n} of your top matches ask for this" if n > 1 else "One of your top matches asks for this",
+        blurb=f"Asked by {asked}.",
+        url=_jobs_link(s, "/career"),
+        actions=[{"label": "Wikipedia", "url": f"https://{s.wikipedia_lang}.wikipedia.org/w/index.php?"
+                  + urlencode({"search": topic})}],
+        ref="gap:" + hashlib.sha1(_gap_key(g["gap"]).encode()).hexdigest()[:16],
+    )
+    if s.invidious.url:
+        try:
+            v = await _random_video(client, s, rng, [f"{topic} explained", f"{topic} tutorial"])
+            vc = _video_card(s, v, "skill", "")
+            card.image, card.embed = vc.image, {**vc.embed, "label": "Watch a lesson here"}
+            card.actions.append({"label": "Video", "url": vc.url})
+        except (Unavailable, httpx.HTTPError):
+            pass
+    return card
+
+
 # ----------------------------------------------------------------- registry
 
 SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaitable[Card]]] = {
@@ -738,6 +947,9 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "photo": photo,
     "language": language,
     "news": news,
+    "homelab": homelab,
+    "job": job,
+    "skill": skill,
 }
 
 
@@ -752,4 +964,7 @@ def configured(s: Settings) -> dict[str, bool]:
         "photo": bool(s.immich.url and s.immich_api_key),
         "news": bool(s.news_feeds),
         "language": bool(s.languages_learning),
+        "homelab": bool(s.homelab_stack or s.homelab_feeds or (s.invidious.url and s.homelab_topics)),
+        "job": bool(s.jobs.url and s.jobs_token),
+        "skill": bool(s.jobs.url and s.jobs_token),
     }

@@ -23,7 +23,7 @@ from urllib.parse import quote
 
 import httpx
 
-from .config import DEFAULT_PROFILE, Settings
+from .config import DEFAULT_PROFILE, UNCURATED_KINDS, Settings
 
 log = logging.getLogger("liessure.profile")
 
@@ -168,7 +168,8 @@ async def propose_interests(client: httpx.AsyncClient, s: Settings, store, cache
     """At most three proposed interests a week, each backed by what you opened."""
     if not (s.graph.url and s.graph_token):
         return 0
-    events = store.events_since(days=14)
+    # Job text is scraped from the web and ops cards are about machines: neither says what you're into.
+    events = [(k, t) for k, t in store.events_since(days=14) if k not in UNCURATED_KINDS]
     if len(events) < 8:
         return 0
     week = (today or date.today()).isocalendar()
