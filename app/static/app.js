@@ -119,6 +119,7 @@ function openUrl(url, inApp) {
 function renderCard(c) {
   const card = el("article", "card " + c.kind);
   card.card = c; // podcast mode finds the readable cards on the page
+  if (c.ref && !c.again) watchViews(card);
   if (c.image) {
     const img = el("img", "media");
     img.loading = "lazy";
@@ -849,6 +850,40 @@ function renderExercise(c, cardEl) {
   box.append(row, result);
   return box;
 }
+
+// How long each card is actually on screen (60% visible), sent in batches: lingering and scrolling past
+// shape which kinds come up and what the curator picks. Nothing leaves the page but kind, ref, title, seconds.
+const viewQueue = [];
+const viewing = new Map(); // card element -> since (ms)
+const viewObserver = "IntersectionObserver" in window ? new IntersectionObserver((entries) => {
+  const now = performance.now();
+  for (const e of entries) {
+    if (e.isIntersecting) { if (!viewing.has(e.target)) viewing.set(e.target, now); }
+    else endView(e.target, now);
+  }
+}, { threshold: 0.6 }) : null;
+
+function watchViews(cardEl) { if (viewObserver) viewObserver.observe(cardEl); }
+
+function endView(cardEl, now) {
+  const since = viewing.get(cardEl);
+  if (since == null) return;
+  viewing.delete(cardEl);
+  const c = cardEl.card;
+  const seconds = (now - since) / 1000;
+  if (c && c.ref && seconds >= 0.3) viewQueue.push({ kind: c.kind, ref: String(c.ref), title: c.title || "", seconds: Math.min(3600, seconds) });
+}
+
+function flushViews(leaving) {
+  if (leaving) { const now = performance.now(); for (const el of [...viewing.keys()]) endView(el, now); }
+  if (!viewQueue.length) return;
+  const body = JSON.stringify(viewQueue.splice(0, 60));
+  if (leaving && navigator.sendBeacon) navigator.sendBeacon("/api/views", new Blob([body], { type: "application/json" }));
+  else fetch("/api/views", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => {});
+}
+setInterval(() => flushViews(false), 15000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushViews(true); });
+window.addEventListener("pagehide", () => flushViews(true));
 
 // Hand a photo to Claude: the Claude app (Android share), the share sheet (iPhone, other
 // browsers), or a text-only new chat when sharing a file isn't possible.

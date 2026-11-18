@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS events (
     ref     TEXT NOT NULL DEFAULT '',
     action  TEXT NOT NULL,
     title   TEXT NOT NULL DEFAULT '',
-    user    TEXT NOT NULL DEFAULT 'owner'
+    user    TEXT NOT NULL DEFAULT 'owner',
+    value   REAL                       -- seconds on screen, for 'view'
 );
 CREATE INDEX IF NOT EXISTS events_kind_ts ON events (kind, ts);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -127,6 +128,8 @@ class Store:
                           ("due", "REAL NOT NULL DEFAULT 0"), ("box", "INTEGER NOT NULL DEFAULT 0")):
             if col not in hist:
                 self._db.execute(f"ALTER TABLE history ADD COLUMN {col} {decl}")
+        if "value" not in cols("events"):
+            self._db.execute("ALTER TABLE events ADD COLUMN value REAL")
         for table in ("events", "ideas", "recall", "recall_answers", "math_attempts"):
             if "user" not in cols(table):
                 self._db.execute(f"ALTER TABLE {table} ADD COLUMN user TEXT NOT NULL DEFAULT 'owner'")
@@ -512,17 +515,54 @@ class Store:
         return cur.rowcount == 1
 
     # --- events
-    def record(self, kind: str, ref: str, action: str, title: str = "", user: str = "owner") -> None:
+    def record(self, kind: str, ref: str, action: str, title: str = "", user: str = "owner",
+               value: float | None = None) -> None:
         with self._lock, self._db:
             self._db.execute(
-                "INSERT INTO events (ts, kind, ref, action, title, user) VALUES (?, ?, ?, ?, ?, ?)",
-                (time.time(), kind, ref[:128], action[:16], title[:300], user),
+                "INSERT INTO events (ts, kind, ref, action, title, user, value) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (time.time(), kind, ref[:128], action[:16], title[:300], user, value),
             )
+
+    # A card counts as engaged if it was opened/played/read, kept (Later), or looked at for LINGER seconds;
+    # as skipped if it was on screen under SKIP seconds and nothing else happened to it.
+    LINGER, SKIP = 8.0, 2.0
+
+    def engagement(self, user: str, days: float = 30) -> dict[str, dict[str, int]]:
+        """Per kind: cards seen, engaged with, and scrolled past, over the last `days`."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT kind, ref, MAX(CASE WHEN action = 'view' THEN value END) AS secs, "
+                "SUM(action IN ('open', 'play', 'read', 'later')) AS acted "
+                "FROM events WHERE user = ? AND ts >= ? AND ref != '' GROUP BY kind, ref",
+                (user, time.time() - days * 86400)).fetchall()
+        out: dict[str, dict[str, int]] = {}
+        for r in rows:
+            k = out.setdefault(r["kind"], {"seen": 0, "engaged": 0, "skipped": 0})
+            secs, acted = r["secs"], r["acted"] or 0
+            if secs is None and not acted:
+                continue
+            k["seen"] += 1
+            if acted or (secs or 0) >= self.LINGER:
+                k["engaged"] += 1
+            elif secs is not None and secs < self.SKIP:
+                k["skipped"] += 1
+        return out
+
+    def signal_titles(self, kind: str, user: str = "owner", limit: int = 8) -> tuple[list[str], list[str]]:
+        """(lingered on, scrolled past) titles of this kind, newest first: what to show more and less of."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT title, MAX(ts) t, MAX(CASE WHEN action = 'view' THEN value END) secs, "
+                "SUM(action IN ('open', 'play', 'read')) acted FROM events WHERE user = ? AND kind = ? AND title != '' "
+                "GROUP BY title ORDER BY t DESC LIMIT 200", (user, kind)).fetchall()
+        linger = [r["title"] for r in rows if not r["acted"] and (r["secs"] or 0) >= self.LINGER][:limit]
+        skip = [r["title"] for r in rows if not r["acted"] and r["secs"] is not None and r["secs"] < self.SKIP][:limit]
+        return linger, skip
 
     def recent_refs(self, kind: str, limit: int = 10) -> list[str]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT ref, MAX(ts) t FROM events WHERE user = 'owner' AND kind = ? AND ref != '' "
+                "SELECT ref, MAX(ts) t FROM events WHERE user = 'owner' AND kind = ? AND ref != '' AND action IN ('open', 'play', 'read') "
                 "GROUP BY ref ORDER BY t DESC LIMIT ?",
                 (kind, limit),
             ).fetchall()
@@ -531,7 +571,7 @@ class Store:
     def recent_titles(self, kind: str, limit: int = 15) -> list[str]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT title, MAX(ts) t FROM events WHERE user = 'owner' AND kind = ? AND title != '' "
+                "SELECT title, MAX(ts) t FROM events WHERE user = 'owner' AND kind = ? AND title != '' AND action IN ('open', 'play', 'read') "
                 "GROUP BY title ORDER BY t DESC LIMIT ?",
                 (kind, limit),
             ).fetchall()
@@ -541,7 +581,7 @@ class Store:
         """(kind, title) of distinct things opened or played, newest first."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT kind, title, MAX(ts) t FROM events WHERE user = 'owner' AND ts >= ? AND title != '' "
+                "SELECT kind, title, MAX(ts) t FROM events WHERE user = 'owner' AND ts >= ? AND title != '' AND action IN ('open', 'play', 'read') "
                 "GROUP BY kind, title ORDER BY t DESC",
                 (time.time() - days * 86400,),
             ).fetchall()
