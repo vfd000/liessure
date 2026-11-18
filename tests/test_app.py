@@ -1,3 +1,4 @@
+import asyncio
 import json
 import random
 import re
@@ -285,7 +286,7 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard"):
+        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia"):
             continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
@@ -1839,4 +1840,42 @@ def test_a_card_goes_onto_the_todo_list():
     with make_client(full_settings()) as c:
         assert c.get("/api/me").json()["todo"] is False
         assert c.post("/api/todo/from-card", json={"card": card, "why": "study"}).status_code == 409
+
+
+def test_jeopardy_clues(tmp_path):
+    from app import jeopardy
+    rows = ["round\tclue_value\tdaily_double_value\tcategory\tcomments\tanswer\tquestion\tair_date\tnotes"]
+    rows += ["1\t200\t0\tLAKES & RIVERS\t\tScottish word for lake\tloch\t1984-09-10\t"] * 30
+    rows += ["2\t800\t0\tART\t\tThe painting seen here\tMona Lisa\t1990-01-01\t"] * 30
+    rows += ['3\t0\t0\tAUTHORS\t\tHe wrote \\"The Raven\\"\t(Edgar Allan) Poe\t2001-05-05\t'] * 30
+    (tmp_path / "jeopardy.tsv").write_text("\n".join(rows) + "\n")
+    s = full_settings(data_dir=str(tmp_path))
+    with make_client(s) as c:
+        cards = [c.get("/api/card/trivia").json() for _ in range(25)]
+    assert all(x["kind"] == "trivia" and x["quiz"]["text"] for x in cards)
+    assert not any("seen here" in x["title"] for x in cards)  # needs a picture: skipped
+    loch = next(x for x in cards if x["quiz"]["answer"] == "loch")
+    assert loch["label"] == "Jeopardy! · LAKES & RIVERS · $200" and loch["title"] == "Scottish word for lake"
+    raven = next(x for x in cards if x["quiz"]["answer"] == "(Edgar Allan) Poe")
+    assert raven["title"] == 'He wrote "The Raven"' and raven["label"].endswith("Final Jeopardy!")
+    assert raven["url"].startswith("https://") and raven["ref"].startswith("trivia:")
+
+
+def test_jeopardy_downloads_once_in_the_background(tmp_path):
+    from app import jeopardy
+    jeopardy._task, jeopardy._failed_at = None, 0.0
+    body = ("round\tv\tdd\tcat\tc\tclue\tresp\tdate\tn\n" + "1\t100\t0\tC\t\tA clue\tan answer\t2000-01-01\t\n" * 40000)
+
+    def backend(request):
+        if request.url.host == "raw.githubusercontent.com":
+            return httpx.Response(200, content=body.encode())
+        return fake_backend(request)
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(backend)) as hc:
+            with pytest.raises(sources.Unavailable):
+                await jeopardy.card(hc, str(tmp_path), random.Random(1))
+            await jeopardy._task
+            return await jeopardy.card(hc, str(tmp_path), random.Random(1))
+    assert asyncio.run(go()).quiz == {"text": True, "answer": "an answer"}
 

@@ -4,7 +4,7 @@
 const LABELS = {
   wikipedia: "Wikipedia", news: "News", game: "Games", video: "Videos", movie: "Movies",
   show: "Series", song: "Music", photo: "Photos", language: "Telugu", homelab: "Home lab",
-  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers", kquiz: "K-drama",
+  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers", kquiz: "K-drama", trivia: "Jeopardy!",
 };
 const android = window.LiessureAndroid || null; // injected by the Android app
 // The page's own words in the reader's language (/api/me's lang); cards carry their own.
@@ -30,6 +30,8 @@ const UI = {
     "Couldn't tick it off the To Do list": "No se pudo marcar en la lista",
     "To do": "Pendiente", "Study further": "Estudiar más", "Implement": "Implementar",
     "On the To Do list": "En la lista", "Couldn't add it to the To Do list": "No se pudo añadir a la lista",
+    "What is…?": "¿Qué es…?", "Not quite. Try again, or show the answer.": "Casi. Inténtalo otra vez o mira la respuesta.",
+    "Answer": "Respuesta",
     "Map": "Mapa", "Hide map": "Ocultar mapa", "Open in Maps": "Abrir en Mapas",
     "approximate route (straight lines between places)": "ruta aproximada (líneas rectas entre lugares)",
     "Search cards you've seen": "Buscar tarjetas que ya viste", "Later": "Después", "Done": "Hecho",
@@ -725,8 +727,79 @@ function parseNum(s) {
 }
 
 // Answer in place: a typed answer (math) or multiple choice (recall).
+// Jeopardy-style: type the response; articles, "What is", punctuation and small typos don't count against you.
+function normAnswer(s) {
+  return String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/^\s*(what|who|where|when)\s+(is|are|was|were)\s+/, "")
+    .replace(/&/g, " and ").replace(/[^a-z0-9 ]/g, " ").replace(/\b(a|an|the)\b/g, " ")
+    .replace(/\s+/g, " ").trim();
+}
+
+function editDistance(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++)
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+function answerMatches(theirs, answer) {
+  const got = normAnswer(theirs);
+  if (!got) return false;
+  // "(Edgar Allan) Poe": with or without the bracketed part; "Mark Twain (or Samuel Clemens)": either.
+  const options = new Set([answer, answer.replace(/\([^)]*\)/g, ""), answer.replace(/[()]/g, "")]);
+  for (const m of answer.matchAll(/\((?:or |accept:? )([^)]*)\)/gi)) options.add(m[1]);
+  for (const o of options) {
+    const want = normAnswer(o);
+    if (!want) continue;
+    if (got === want) return true;
+    if (Math.abs(got.length - want.length) <= 3 && editDistance(got, want) <= Math.max(1, Math.floor(want.length / 6))) return true;
+    const last = want.split(" ").pop();
+    if (want.includes(" ") && last.length >= 4 && got === last) return true; // a surname is enough
+    // Most of the words, or all of them plus a couple ("Madame Tussauds" for "Madame Tussauds Wax Museum",
+    // "the Jordan River" for "the Jordan"); each word may have a small typo.
+    const near = (x, list) => list.some((y) => y === x || (x.length > 3 && editDistance(x, y) <= 1));
+    const g = got.split(" "), w = want.split(" ");
+    if (g.every((x) => near(x, w)) && g.length * 2 >= w.length && g.join("").length >= 4) return true;
+    if (w.every((x) => near(x, g)) && g.length - w.length <= 2) return true;
+  }
+  return false;
+}
+
+function renderTextQuiz(c) {
+  const q = c.quiz;
+  const box = el("div", "quiz");
+  const row = el("div", "quiz-row");
+  const input = el("input");
+  input.type = "text";
+  input.placeholder = t("What is…?");
+  input.autocomplete = "off";
+  const check = el("button", "primary", t("Check"));
+  const show = el("button", "", t("Show answer"));
+  const result = el("p", "quiz-result");
+  const finish = (msg) => {
+    result.textContent = msg;
+    input.disabled = check.disabled = show.disabled = true;
+    report(c, "play");
+  };
+  check.onclick = () => {
+    if (!input.value.trim()) return;
+    if (answerMatches(input.value, q.answer)) finish(`${t("Right!")} ${q.answer}`);
+    else result.textContent = t("Not quite. Try again, or show the answer.");
+  };
+  input.onkeydown = (e) => { if (e.key === "Enter") check.onclick(); };
+  show.onclick = () => finish(`${t("Answer")}: ${q.answer}`);
+  row.append(input, check, show);
+  box.append(row, result);
+  return box;
+}
+
 function renderQuiz(c) {
   const q = c.quiz;
+  if (q.text) return renderTextQuiz(c);
   const box = el("div", "quiz");
   const result = el("p", "quiz-result");
   const solution = el("p", "why", q.solution || "");
