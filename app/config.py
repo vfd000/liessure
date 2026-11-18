@@ -50,12 +50,13 @@ DEFAULT_WEIGHTS = {
     "kquiz": 2,
     "trivia": 2,
     "session": 3,
+    "exercise": 2,
     "flashcard": 3,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "session": 2, "flashcard": 2}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "session": 2, "exercise": 1, "flashcard": 2}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
 RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite"})
@@ -100,10 +101,10 @@ def parse_user_prefs(raw: str, path: str = "") -> dict[str, dict]:
 
 
 # Kinds only the owner sees: they read the owner's own services (jobs, lists, the lab).
-OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry", "session"})
+OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry", "session", "exercise"})
 
 # Kinds whose titles never go to the LLM as evidence of what you like.
-UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia", "session"})
+UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia", "session", "exercise"})
 
 KINDS = tuple(DEFAULT_WEIGHTS)
 
@@ -344,6 +345,12 @@ class Settings:
     sessions_token: str = ""
     hub_url: str = "https://agents.liess.tv/hub/"
 
+    # Exercise cards: the household Exercises list (lists service) and the activity tracker (vfd000/activity-tracker,
+    # its MCP_API_TOKEN, read only) to know whether there's been a run today.
+    exercise_list_id: int = 15
+    activity_url: str = ""
+    activity_token: str = ""
+
     # What a kWh is worth: PSE's effective rate, what solar saves (or earns back) per kWh.
     home_energy_rate: float = 0.22
 
@@ -437,6 +444,9 @@ class Settings:
             sessions_url=_strip(_env("SESSIONS_URL")),
             sessions_token=_env("SESSIONS_TOKEN"),
             hub_url=_env("HUB_URL", cls.hub_url),
+            exercise_list_id=int(_env("EXERCISE_LIST_ID", "15")),
+            activity_url=_strip(_env("ACTIVITY_URL")),
+            activity_token=_env("ACTIVITY_TOKEN"),
         )
 
 

@@ -58,6 +58,9 @@ CREATE TABLE IF NOT EXISTS recall (
 );
 CREATE TABLE IF NOT EXISTS recall_answers (ts REAL NOT NULL, recall_id INTEGER NOT NULL, correct INTEGER NOT NULL,
     user TEXT NOT NULL DEFAULT 'owner');
+CREATE TABLE IF NOT EXISTS exercise_log (     -- exercises marked Done on a card
+    ts REAL NOT NULL, user TEXT NOT NULL, ex_id TEXT NOT NULL, name TEXT NOT NULL, area TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS todo_estimates (  -- how long a to-do item takes, redone when its text changes
     item_id INTEGER PRIMARY KEY, text_hash TEXT NOT NULL, minutes INTEGER NOT NULL,
     label TEXT NOT NULL, assumption TEXT NOT NULL DEFAULT '', ts REAL NOT NULL
@@ -293,6 +296,17 @@ class Store:
                 "most_help": most_help, "help_30d": kinds}
 
     # --- to-do estimates
+    def log_exercise(self, user: str, ex_id: str, name: str, area: str) -> None:
+        with self._lock, self._db:
+            self._db.execute("INSERT INTO exercise_log (ts, user, ex_id, name, area) VALUES (?, ?, ?, ?, ?)",
+                             (time.time(), user, ex_id, name, area))
+
+    def exercises_since(self, user: str, since: float) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute("SELECT ts, ex_id, name, area FROM exercise_log WHERE user = ? AND ts >= ? "
+                                    "ORDER BY ts", (user, since)).fetchall()
+        return [dict(r) for r in rows]
+
     def todo_estimates(self) -> dict[int, dict[str, Any]]:
         with self._lock:
             rows = self._db.execute("SELECT * FROM todo_estimates").fetchall()

@@ -286,7 +286,7 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia", "session"):
+        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia", "session", "exercise"):
             continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
@@ -1972,4 +1972,38 @@ def test_listen_reads_the_article_not_just_the_card():
                                                   "url": "https://news.example/x"}}).json()
         assert r == {"text": "A headline.\n\nSite What happened.", "lang": "en"}
         assert c.post("/api/listen", json={"card": {}}).status_code == 422
+
+
+def test_exercise_fits_the_hour_and_skips_cardio_after_a_run():
+    from datetime import datetime
+    from app import exercise
+    rng = random.Random(3)
+    late = datetime(2026, 11, 18, 23, 0)
+    for _ in range(30):
+        assert exercise.choose(rng, late, set(), False, [])["area"] == "Breathing"
+    day = datetime(2026, 11, 18, 14, 0)
+    picks = [exercise.choose(rng, day, set(), True, []) for _ in range(200)]
+    assert not any(p.get("cardio") for p in picks)  # ran today: no more cardio
+    assert not any(p["area"] == "Breathing" for p in picks)  # breathing is for winding down
+    every = {e["id"] for e in exercise.LIBRARY}
+    try:
+        exercise.choose(rng, late, every, False, [])
+        assert False, "nothing should fit when everything's done"
+    except sources.Unavailable:
+        pass
+    mine = exercise.from_list([{"text": "Banded external rotation", "notes": "3 x 15, red band"}])
+    assert mine[0]["how"] == "3 x 15, red band"
+    c = exercise.card_for(mine[0], day, False)
+    assert c.kind == "exercise" and c.exercise["id"].startswith("list-") and c.url.startswith("https://")
+
+
+def test_exercise_done_and_not_now():
+    s = full_settings()
+    with make_client(s) as c:
+        card = c.get("/api/card/exercise").json()
+        assert card["kind"] == "exercise" and card["exercise"]["id"]
+        r = c.post("/api/exercise/done", json=card["exercise"]).json()
+        assert r["today"] == 1 and r["minutes"] >= 1
+        assert c.post("/api/exercise/not-now").json()["until"] > 0
+        assert c.get("/api/card/exercise").status_code == 503  # Not now holds
 
