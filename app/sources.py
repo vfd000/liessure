@@ -59,6 +59,7 @@ class Card:
     open_label: str = ""
     # Shown under a "Details" button: [{"label", "value"}] rows, and {"label", "url"} links.
     details: list[dict[str, str]] = field(default_factory=list)
+    details_label: str = ""
     # More text fetched when asked for: {"label", "url"} (a job's full description).
     more: dict[str, str] = field(default_factory=dict)
     # A photo the page can ask about (Identify, Ask Claude): {"id", "when", "place", "lat", "lon"}.
@@ -162,7 +163,27 @@ def _wiki_card(data: dict[str, Any], kind: str, label: str) -> Card:
     )
 
 
+async def _wiki_interest(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> dict[str, Any]:
+    """An article on one of the reader's interests (a search, then one of the top hits)."""
+    r = await client.get(f"https://{s.wikipedia_lang}.wikipedia.org/w/api.php", params={
+        "action": "query", "list": "search", "srsearch": rng.choice(s.wiki_interests), "srlimit": "15",
+        "format": "json"})
+    r.raise_for_status()
+    titles = [h["title"] for h in (r.json().get("query") or {}).get("search") or [] if h.get("title")]
+    if not titles:
+        raise Unavailable("no articles for that interest")
+    return await _wiki_summary(client, s.wikipedia_lang, rng.choice(titles))
+
+
 async def wikipedia(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    # Half the time something on the reader's interests; otherwise random (with some surprise in it).
+    if s.wiki_interests and rng.random() < 0.5:
+        try:
+            data = await _wiki_interest(client, s, rng)
+            if data.get("type") != "disambiguation" and len(data.get("extract") or "") > 200:
+                return _wiki_card(data, "wikipedia", "Wikipedia")
+        except (Unavailable, httpx.HTTPError, ValueError, KeyError):
+            pass
     # Random articles are often stubs. Draw a few and keep the meatiest.
     best: dict[str, Any] | None = None
     for _ in range(3):
@@ -757,7 +778,8 @@ def parse_feed(body: bytes) -> list[dict[str, Any]]:
 async def feed_items(client: httpx.AsyncClient, urls: list[str], max_age_hours: float,
                      cache: _TTLCache) -> list[dict[str, Any]]:
     """Recent items across several RSS/Atom feeds, cached."""
-    hit = cache.get("all")
+    key = tuple(urls)  # per feed list: people reading in different languages share one cache
+    hit = cache.get(key)
     if hit is not None:
         return hit
     results = await asyncio.gather(*(client.get(u) for u in urls), return_exceptions=True)
@@ -771,7 +793,7 @@ async def feed_items(client: httpx.AsyncClient, urls: list[str], max_age_hours: 
             items += [i for i in parse_feed(r.content) if i["ts"] is None or i["ts"] >= cutoff]
         except (httpx.HTTPError, ElementTree.ParseError) as e:
             log.warning("feed %s failed: %s", url, e)
-    cache.put("all", items)
+    cache.put(key, items)
     return items
 
 
@@ -1716,6 +1738,8 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "todo": todo,
     "infosec": infosec,
     "bite": bite,
+    "lesson": bite,  # also served by main.py from a per-person pool
+    "career": bite,  # likewise
 }
 
 
@@ -1740,4 +1764,6 @@ def configured(s: Settings) -> dict[str, bool]:
         "todo": bool(s.lists.url and s.lists_token and s.llm_url and s.llm_key),
         "infosec": bool(s.phrack or s.infosec_feeds),
         "bite": bool(s.llm_url and s.llm_key),  # the curator writes them
+        "lesson": bool(s.llm_url and s.llm_key),
+        "career": bool(s.llm_url and s.llm_key),
     }
