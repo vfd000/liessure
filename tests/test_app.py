@@ -541,6 +541,7 @@ def test_phrase_links_speak_instead_of_forvo():
     acts = curator.phrase_actions("廁所喺邊度?", "zh-yue")
     assert acts[0] == {"label": "Hear it", "speak": {"text": "廁所喺邊度?", "lang": "zh-HK", "fallback": acts[1]["url"]}}
     assert acts[1]["label"] == "Google Translate" and "sl=yue" in acts[1]["url"] and "tl=en" in acts[1]["url"]
+    assert acts[1]["in_app"] == "1"
     assert curator.phrase_actions("नमस्ते", "hi")[0]["speak"]["lang"] == "hi-IN"
     assert curator.phrase_url("廁所喺邊度?").endswith("%E5%BA%A6")  # no trailing "?"
     s = full_settings()
@@ -1063,4 +1064,15 @@ def test_photo_details_and_identify(monkeypatch):
     assert "Kyoto, Japan" in seen["content"][0]["text"] and seen["content"][1]["image_url"]["url"].startswith("data:image/jpeg")
     with make_client(full_settings()) as c:
         assert c.post("/api/photo/abcdef12/identify").status_code == 409
+
+
+def test_page_code_always_revalidates(client):
+    for path in ("/app.js", "/style.css", "/sw.js"):
+        r = client.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path
+
+
+def test_index_names_code_by_version(client):
+    html = client.get("/").text
+    assert re.search(r'src="/app\.js\?v=[0-9a-f]{10}"', html) and re.search(r'href="/style\.css\?v=[0-9a-f]{10}"', html)
 
