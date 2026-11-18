@@ -72,6 +72,8 @@ class Card:
     # Something to answer in place. Typed: {"answer", "tolerance", "hint", "solution"};
     # multiple choice: {"id", "choices", "answer" (index), "solution"}.
     quiz: dict[str, Any] = field(default_factory=dict)
+    # An exercise to mark Done or put off: {"id", "name", "area"}.
+    exercise: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1852,6 +1854,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "kquiz": kquiz_card,
     "trivia": trivia_card,
     "session": session,
+    "exercise": bite,  # served by main.py (the Done log and Not now are per person)
     "flashcard": bite,  # served by main.py from the person's decks
 }
 
@@ -1881,6 +1884,7 @@ def configured(s: Settings) -> dict[str, bool]:
         "career": bool(s.llm_url and s.llm_key),
         "kquiz": True,  # only for readers learning Korean (main.kinds_for)
         "session": bool(s.sessions_url and s.sessions_token),
-        "trivia": True,  # Jeopardy! clues, downloaded to the data volume on first use (jeopardy.py)
+        "trivia": True,
+        "exercise": True,  # owner only; the Exercises list and the activity tracker are optional  # Jeopardy! clues, downloaded to the data volume on first use (jeopardy.py)
         "flashcard": True,  # only for people with flashcards due (main.kinds_for)
     }

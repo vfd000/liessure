@@ -4,7 +4,7 @@
 const LABELS = {
   wikipedia: "Wikipedia", news: "News", game: "Games", video: "Videos", movie: "Movies",
   show: "Series", song: "Music", photo: "Photos", language: "Telugu", homelab: "Home lab",
-  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers", kquiz: "K-drama", trivia: "Jeopardy!", session: "Claude sessions",
+  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers", kquiz: "K-drama", trivia: "Jeopardy!", exercise: "Exercise", session: "Claude sessions",
 };
 const android = window.LiessureAndroid || null; // injected by the Android app
 // The page's own words in the reader's language (/api/me's lang); cards carry their own.
@@ -37,6 +37,8 @@ const UI = {
     "Lyrics": "Letra", "Hide lyrics": "Ocultar letra", "Lyrics from": "Letra de",
     "follows the song when you play it here": "sigue la canción si la reproduces aquí",
     "No lyrics found for this song.": "No se encontró la letra.", "Couldn't get the lyrics right now.": "No se pudo cargar la letra.",
+    "Done": "Hecho", "Not now": "Ahora no", "Nice.": "¡Bien!", "exercise": "ejercicio", "exercises": "ejercicios",
+    "today": "hoy", "Okay, no exercise for a couple of hours.": "Vale, nada de ejercicio por un par de horas.",
     "Map": "Mapa", "Hide map": "Ocultar mapa", "Open in Maps": "Abrir en Mapas",
     "approximate route (straight lines between places)": "ruta aproximada (líneas rectas entre lugares)",
     "Search cards you've seen": "Buscar tarjetas que ya viste", "Later": "Después", "Done": "Hecho",
@@ -150,6 +152,7 @@ function renderCard(c) {
 
   if (c.quiz && (c.quiz.choices || c.quiz.answer !== undefined)) body.append(renderQuiz(c));
   if (c.flash) body.append(renderFlash(c, card));
+  if (c.exercise && c.exercise.id) body.append(renderExercise(c, card));
 
   const actions = el("div", "actions");
   if (c.more && c.more.url) {
@@ -818,6 +821,34 @@ function startPodcast() {
   podcastNext();
 }
 document.getElementById("podcast").onclick = startPodcast;
+
+// Exercise cards: Done (kept; not offered again today) or Not now (no exercise cards for two hours).
+function renderExercise(c, cardEl) {
+  const row = el("div", "quiz-row");
+  const done = el("button", "primary", "✓ " + t("Done"));
+  const later = el("button", "", t("Not now"));
+  const result = el("p", "quiz-result");
+  const post = (path, body) => fetch(path, { method: "POST", headers: { "content-type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
+  done.onclick = async () => {
+    done.disabled = later.disabled = true;
+    try {
+      const n = await post("/api/exercise/done", c.exercise);
+      result.textContent = `${t("Nice.")} ${n.today} ${t(n.today === 1 ? "exercise" : "exercises")} ${t("today")}, ~${n.minutes} min.`;
+      report(c, "play");
+    } catch { result.textContent = t("Couldn't save that"); done.disabled = later.disabled = false; }
+  };
+  later.onclick = async () => {
+    done.disabled = later.disabled = true;
+    try { await post("/api/exercise/not-now"); } catch {}
+    result.textContent = t("Okay, no exercise for a couple of hours.");
+    setTimeout(() => cardEl.remove(), 1200);
+  };
+  row.append(done, later);
+  const box = el("div", "quiz");
+  box.append(row, result);
+  return box;
+}
 
 // Hand a photo to Claude: the Claude app (Android share), the share sheet (iPhone, other
 // browsers), or a text-only new chat when sharing a file isn't possible.

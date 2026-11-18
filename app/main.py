@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 import dataclasses
 
-from . import auth, avoid, curator, flashcards, lessons, lyrics, profile, reader, sources
+from . import auth, avoid, curator, exercise, flashcards, lessons, lyrics, profile, reader, sources
 from .config import LESSON_LABELS
 from .config import KINDS, MAX_PER_LOAD, OWNER_ONLY_KINDS, RECALL_KINDS, Settings
 from .store import Store
@@ -77,6 +77,12 @@ class FromCard(BaseModel):
 class CardToTodo(BaseModel):
     card: dict = Field(...)
     why: str = Field(pattern="^(study|implement)$")
+
+
+class ExerciseDone(BaseModel):
+    id: str = Field(max_length=80)
+    name: str = Field("", max_length=200)
+    area: str = Field("", max_length=60)
 
 
 class ListenTo(BaseModel):
@@ -360,6 +366,8 @@ def create_app(
             return await own_bite(client, user, rng)
         if kind == "todo":
             return await todo_card(client, rng)
+        if kind == "exercise":
+            return await exercise_card(client, rng, user)
         # Mostly the curated pool; a share of uncurated cards keeps some surprise in it.
         # The curated pool is picked for the owner's profile; others get fresh cards until per-user curation.
         if user == auth.OWNER and settings.curator_enabled and rng.random() < settings.curator_share:
@@ -406,6 +414,53 @@ def create_app(
                 log.warning("careers for %s: %s", user, e)
             pick = store.take(pool, rng.random())
         return pick["card"] if pick else None
+
+    def day_start(now: datetime) -> float:
+        return now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+    async def exercise_card(client: httpx.AsyncClient, rng: random.Random, user: str,
+                            now: datetime | None = None) -> dict | None:
+        """A short exercise that fits the hour; none while Not now holds, no cardio after a run today."""
+        now = now or datetime.now().astimezone()
+        if float(store.get_meta(f"exercise_snooze:{user}") or 0) > now.timestamp():
+            return None
+        done = {r["ex_id"] for r in store.exercises_since(user, day_start(now))}
+        mine: list[dict] = []
+        if settings.lists.url and settings.lists_token and settings.exercise_list_id:
+            try:
+                r = await client.get(f"{settings.lists.url}/lists/{settings.exercise_list_id}",
+                                     params={"include_checked": "false"},
+                                     headers={"Authorization": f"Bearer {settings.lists_token}"}, timeout=10)
+                r.raise_for_status()
+                mine = exercise.from_list(r.json().get("items") or [])
+            except (httpx.HTTPError, ValueError) as e:
+                log.info("exercises list: %s", e)
+        ran = False
+        try:
+            ran = await exercise.ran_today(client, settings, now)
+        except (httpx.HTTPError, ValueError) as e:
+            log.info("activity tracker: %s", e)
+        try:
+            pick = exercise.choose(rng, now, done, ran, mine)
+        except sources.Unavailable:
+            return None
+        return exercise.card_for(pick, now, ran).to_dict()
+
+    @app.post("/api/exercise/done")
+    async def exercise_done(request: Request, body: ExerciseDone):
+        """Done on an exercise card: kept, so it isn't offered again today. The reply is today's tally."""
+        user = request.state.user
+        store.log_exercise(user, body.id, body.name, body.area)
+        today = store.exercises_since(user, day_start(datetime.now().astimezone()))
+        return {"today": len(today), "minutes": sum(next((e["minutes"] for e in exercise.LIBRARY
+                                                          if e["id"] == r["ex_id"]), 5) for r in today)}
+
+    @app.post("/api/exercise/not-now")
+    async def exercise_not_now(request: Request, hours: float = Query(2, ge=0.5, le=24)):
+        """Not now: no exercise cards for a while."""
+        until = datetime.now().timestamp() + hours * 3600
+        store.set_meta(f"exercise_snooze:{request.state.user}", str(until))
+        return {"until": until}
 
     async def todo_card(client: httpx.AsyncClient, rng: random.Random) -> dict | None:
         """An open to-do item that fits the moment, with how long it takes."""
