@@ -317,6 +317,11 @@ class Settings:
     # The person whose services Liessure reads and whose data predates multi-user (axl).
     owner_sub: str = "387450248433827843"
     user_prefs: dict[str, dict] = field(default_factory=dict)
+    # Set per reader (main.settings_for): the language LLM answers and Claude tutoring use ("" = English),
+    # and whether language cards may show a whole Wikipedia article in the language being learned.
+    reply_lang: str = ""
+    # Off by default: for a learner a whole article in the language is a wall of text; lessons do it better.
+    language_wiki: bool = False
     public_url: str = "https://liessure.liess.tv"
 
     @property
@@ -412,6 +417,7 @@ class Settings:
             zitadel_client_secret=_env("ZITADEL_CLIENT_SECRET"),
             zitadel_user_subs=[x.strip() for x in _env("ZITADEL_USER_SUBS").split(",") if x.strip()],
             owner_sub=_env("OWNER_SUB", cls.owner_sub),
+            language_wiki=_env("LANGUAGE_WIKI", "0") not in ("0", "false", "no"),
             user_prefs=parse_user_prefs(_env("USER_PREFS"), _env("USER_PREFS_FILE", "/data/user-prefs.json")),
             public_url=_strip(_env("PUBLIC_URL", cls.public_url)),
             lists=svc("LISTS"),

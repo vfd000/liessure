@@ -234,8 +234,11 @@ function speak({ text, lang, fallback }) {
 async function askClaude(c) {
   const p = c.photo || {};
   const where = [p.place, p.lat != null ? `${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}` : ""].filter(Boolean).join(" · ");
-  const text = `What's in this photo? I took it${p.when ? " on " + p.when : ""}${where ? " at " + where : ""}. ` +
-    "Identify what you can (landmarks, plants, animals, the kind of place) and tell me about the area.";
+  const text = UI_LANG === "es"
+    ? `¿Qué hay en esta foto? La tomé${p.when ? " el " + p.when : ""}${where ? " en " + where : ""}. ` +
+      "Identifica lo que puedas (lugares, plantas, animales, el tipo de sitio) y cuéntame sobre la zona. Responde en español."
+    : `What's in this photo? I took it${p.when ? " on " + p.when : ""}${where ? " at " + where : ""}. ` +
+      "Identify what you can (landmarks, plants, animals, the kind of place) and tell me about the area.";
   try {
     const blob = await (await fetch(c.image)).blob();
     if (android && android.shareImage) {

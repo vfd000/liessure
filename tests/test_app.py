@@ -1384,7 +1384,7 @@ def test_a_spanish_reader_gets_lessons(monkeypatch):
     with TestClient(app, base_url="https://testserver") as a:
         sign_in(a, who, AXL)
         assert a.get("/api/me").json()["lang"] == "en"
-        assert not a.get("/api/sources").json()["sources"]["lesson"]["configured"]  # axl has no lesson prefs
+        assert a.get("/api/sources").json()["sources"]["lesson"]["configured"]  # from his profile's languages
 
 
 def test_user_prefs_come_from_the_server_not_the_code(tmp_path):
@@ -1457,4 +1457,52 @@ def test_app_sign_in_through_a_browser_tab():
         assert webview.get("/api/me").json()["user"] == "owner"
         assert webview.get("/auth/ticket", params={"ticket": ticket, "verifier": verifier},
                            follow_redirects=False).status_code == 403  # used up
+
+
+def test_a_spanish_reader_gets_spanish_help_and_no_wikipedia_walls(monkeypatch):
+    who = [READER]
+    seen = {}
+
+    async def ask(client, s, prompt, system=None):
+        seen["system"] = system
+        return "1. Restaste en vez de sumar."
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    app = create_app(sso_settings(llm_url="http://llm.test", llm_key="k", user_prefs={READER: READER_PREFS},
+                                  language_practice_url="https://practice.example"),
+                     transport=httpx.MockTransport(sso_backend(who)), store=Store(":memory:"), run_curator=False)
+    from urllib.parse import parse_qs, urlparse
+    with TestClient(app, base_url="https://testserver") as d:
+        app.state.sso.allowed.add(READER)
+        sign_in(d, who, READER)
+        math = d.get("/api/card/math").json()
+        q = parse_qs(urlparse(math["actions"][0]["url"]).query)["q"][0]
+        assert q.startswith("Reply only in Spanish")
+        r = d.post("/api/math/help", json={"question": "q", "answer": "1", "theirs": "2"})
+        assert r.status_code == 200 and seen["system"].endswith("Write the whole explanation in Spanish.")
+        labels = {d.get("/api/card/language").json().get("label") for _ in range(30)}
+        assert not any("Wikipedia" in (l or "") for l in labels)  # no whole articles in a language she's starting
+        assert not any("practice" in (l or "") for l in labels)  # and not the owner's drill
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        q = parse_qs(urlparse(a.get("/api/card/math").json()["actions"][0]["url"]).query)["q"][0]
+        assert q.startswith("Tutor me")  # English for the owner
+
+
+def test_the_owner_gets_beginner_lessons_in_the_languages_he_is_learning(monkeypatch):
+    seen = {}
+
+    async def ask(client, s, prompt, system=None):
+        seen.setdefault("prompts", []).append(prompt)
+        return json.dumps({"items": [{"text": "నమస్కారం", "romanization": "namaskāram", "translation": "Hello",
+                                      "words": [{"word": "నమస్కారం", "romanization": "namaskāram", "meaning": "greeting"}],
+                                      "note": "Polite."}]})
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    s = full_settings(llm_url="http://llm.test", llm_key="k", languages_learning=[("Telugu", "te")], curator_share=0)
+    with make_client(s) as c:
+        card = c.get("/api/card/lesson").json()
+        labels = {c.get("/api/card/language").json().get("label") for _ in range(20)}
+    assert card["title"] == "నమస్కారం" and card["details_label"] == "Explain"
+    assert {"label": "Translation", "value": "Hello"} in card["details"]
+    assert "beginner Telugu" in seen["prompts"][0] and "whose language is English" in seen["prompts"][0]
+    assert not any("Wikipedia" in (l or "") for l in labels)
 

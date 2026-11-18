@@ -623,8 +623,9 @@ _identified: dict[str, str] = {}
 
 async def identify_photo(client: httpx.AsyncClient, s: Settings, asset_id: str, ask=None) -> str:
     """What's in an Immich photo, from the vision model; cached per photo for the life of the process."""
-    if asset_id in _identified:
-        return _identified[asset_id]
+    key = f"{asset_id}:{s.reply_lang}"
+    if key in _identified:
+        return _identified[key]
     r = await client.get(f"{s.immich.url}/api/assets/{asset_id}", headers={"x-api-key": s.immich_api_key})
     r.raise_for_status()
     asset = r.json()
@@ -632,8 +633,9 @@ async def identify_photo(client: httpx.AsyncClient, s: Settings, asset_id: str, 
     image = await _thumb_data_uri(client, s, asset_id)
     parts = [{"type": "text", "text": f"What's in this photo? {hints}"},
              {"type": "image_url", "image_url": {"url": image}}]
-    text = (await (ask or ask_llm)(client, s, parts, system=IDENTIFY_SYSTEM)).strip()
-    _identified[asset_id] = text
+    system = IDENTIFY_SYSTEM + (f" Write it in {s.reply_lang}." if s.reply_lang else "")
+    text = (await (ask or ask_llm)(client, s, parts, system=system)).strip()
+    _identified[key] = text
     return text
 
 
@@ -650,7 +652,8 @@ async def math_help(client: httpx.AsyncClient, s: Settings, question: str, answe
     ask = ask or ask_llm
     prompt = (f"Problem: {question}\nCorrect answer: {answer}\nWorked solution: {solution}\n"
               f"The learner answered: {theirs}")
-    return (await ask(client, s, prompt, system=MATH_HELP_SYSTEM)).strip()
+    system = MATH_HELP_SYSTEM + (f" Write the whole explanation in {s.reply_lang}." if s.reply_lang else "")
+    return (await ask(client, s, prompt, system=system)).strip()
 
 
 # --------------------------------------------------------------------- todo
