@@ -228,6 +228,12 @@ class MainActivity : Activity() {
         fromCache = false
         visiting.clear()
         web.settings.cacheMode = WebSettings.LOAD_DEFAULT
+        // A Jellyfin link caught from another app: that page here (https only), Back leaves the app.
+        if (data != null && data.host == BuildConfig.JELLYFIN_HOST && (data.scheme == "https" || data.scheme == "http")) {
+            visiting.add(BuildConfig.JELLYFIN_HOST)
+            web.loadUrl(data.buildUpon().scheme("https").build().toString())
+            return
+        }
         val fromReddit = intent?.data?.host?.contains("redd") == true
         val url = if (fromReddit) home.buildUpon().appendQueryParameter("from", "reddit").build() else home
         web.loadUrl(url.toString())
