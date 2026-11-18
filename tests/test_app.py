@@ -133,6 +133,10 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
         else:
             pages = [wiki_page(f"{lang} {gen} {n}") for n in range(2)]
         return httpx.Response(200, json={"query": {"pages": pages}})
+    if host == "jf.test" and path == "/Items" and q.get("ids"):
+        codec = "alac" if q["ids"] == "a1ac0001" else "flac"
+        return httpx.Response(200, json={"Items": [{"Id": q["ids"], "MediaSources": [
+            {"MediaStreams": [{"Type": "Audio", "Codec": codec}]}]}]})
     if host == "jf.test" and (path == "/Items" or path.endswith("/Similar")):
         assert "Token=\"jft\"" in request.headers["authorization"]
         t = q.get("IncludeItemTypes", "Audio")
@@ -1232,4 +1236,19 @@ def test_bites_come_from_the_article_and_serve_from_the_pool():
         card = c.get("/api/card/bite").json()
     assert card["title"] == "The Cascade volcanoes are one chain" and card["label"] == "Bite-size · Pacific Northwest geology"
     assert card["url"] == "https://en.m.wikipedia.org/wiki/Geology_of_the_Pacific_Northwest"
+
+
+def test_audio_streams_the_file_when_the_browser_can_play_it():
+    calls = []
+
+    def backend(request):
+        if request.url.path.startswith("/Audio/"):
+            calls.append((request.url.path, dict(request.url.params)))
+        return fake_backend(request)
+    sources._codec_cache.clear()
+    with make_client(full_settings(), handler=backend) as c:
+        assert c.get("/stream/audio/abc12345").status_code == 200
+        assert c.get("/stream/audio/a1ac0001").status_code == 200
+    assert calls[0] == ("/Audio/abc12345/stream", {"static": "true"})  # whole file: a length, so seeking works
+    assert calls[1][0] == "/Audio/a1ac0001/universal" and calls[1][1]["AudioCodec"] == "mp3"
 
