@@ -12,7 +12,10 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
 import android.util.Base64
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.FileProvider
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.io.File
 import android.security.KeyChain
 import android.view.WindowInsets
@@ -143,6 +146,11 @@ class MainActivity : Activity() {
     }
 
     private fun loadFor(intent: Intent?) {
+        val data = intent?.data
+        if (data?.scheme == "liessure" && data.host == "signed-in") {
+            finishSignIn(data)
+            return
+        }
         fromCache = false
         visiting.clear()
         web.settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -152,6 +160,50 @@ class MainActivity : Activity() {
     }
 
     private fun isHome(url: String?): Boolean = url != null && Uri.parse(url).host == home.host
+
+    private var signInStarted = 0L
+
+    /**
+     * Sign in in a Chrome Custom Tab: the WebView can't use the phone's passkeys, Chrome can. The app keeps a
+     * random verifier and sends only its hash; Liessure hands the session back as a one-time ticket via
+     * liessure://signed-in, which only that verifier can redeem.
+     */
+    private fun startSignIn() {
+        val now = System.currentTimeMillis()
+        if (now - signInStarted < 3000) return // the redirect can arrive twice; one tab is enough
+        signInStarted = now
+        val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val flags = Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
+        val verifier = Base64.encodeToString(bytes, flags)
+        val challenge = Base64.encodeToString(MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray()), flags)
+        prefs.edit().putString("signin_verifier", verifier).apply()
+        val url = home.buildUpon().path("/auth/login").clearQuery().appendQueryParameter("app", challenge).build()
+        val html = """
+            <html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+            <body style="background:#14161a;color:#eceae6;font-family:sans-serif;padding:24px;display:flex;
+              flex-direction:column;align-items:center;justify-content:center;min-height:85vh;text-align:center">
+            <p style="font-size:18px">Signing in with your browser…</p>
+            <p style="color:#9aa0a8;font-size:14px">Finish there (passkey or password); you'll come straight back.</p>
+            <button style="font-size:16px;padding:10px 18px;border-radius:8px;border:0;background:#7cc4ad"
+              onclick="LiessureAndroid.signIn()">Open sign-in again</button></body></html>
+        """.trimIndent()
+        web.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+        try {
+            CustomTabsIntent.Builder().build().launchUrl(this, url)
+        } catch (e: ActivityNotFoundException) {
+            openExternal(url.toString())
+        }
+    }
+
+    private fun finishSignIn(data: Uri) {
+        val ticket = data.getQueryParameter("ticket").orEmpty()
+        val verifier = prefs.getString("signin_verifier", null).orEmpty()
+        prefs.edit().remove("signin_verifier").apply()
+        signInStarted = 0L
+        setIntent(Intent(Intent.ACTION_MAIN)) // a retry later reloads the feed, not this used-up link
+        web.loadUrl(home.buildUpon().path("/auth/ticket").clearQuery()
+            .appendQueryParameter("ticket", ticket).appendQueryParameter("verifier", verifier).build().toString())
+    }
 
     /** Open a link in whichever app claims it, never back into Liessure itself. */
     private fun openExternal(raw: String) {
@@ -260,6 +312,9 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun retry() = runOnUiThread { loadFor(intent) }
 
+        @JavascriptInterface
+        fun signIn() = runOnUiThread { signInStarted = 0L; startSignIn() }
+
         /** Pick a .p12 file and hand it to Android's certificate installer (it asks for the password). */
         @JavascriptInterface
         fun installCert() = runOnUiThread { pickCert() }
@@ -303,6 +358,11 @@ class MainActivity : Activity() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val uri = request.url
             if (!request.isForMainFrame) return false // inline players (iframes) stay put
+            // Liessure wants a sign-in: do it in a browser tab, not here (passkeys don't work in a WebView).
+            if (uri.host == home.host && uri.path == "/auth/login" && uri.getQueryParameter("app") == null) {
+                startSignIn()
+                return true
+            }
             if ((uri.scheme == "https" || uri.scheme == "http") && (uri.host in inAppHosts || uri.host in visiting)) return false
             openExternal(uri.toString())
             return true

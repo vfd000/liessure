@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import re
 import secrets
 import time
 from typing import Any
@@ -31,6 +32,11 @@ log = logging.getLogger("liessure.auth")
 COOKIE = "liessure_session"
 SESSION_TTL = 30 * 24 * 3600
 PENDING_TTL = 600
+TICKET_TTL = 60
+# The Android app signs in through a Chrome Custom Tab (passkeys work there, not in its WebView), then
+# gets the session back through this link: a one-time ticket, usable only with the app's own verifier.
+APP_RETURN = "liessure://signed-in"
+_CHALLENGE = re.compile(r"^[A-Za-z0-9_-]{43}$")  # base64url(sha256(verifier)), no padding
 OWNER = "owner"
 
 
@@ -49,7 +55,8 @@ class SSO:
         self.issuer = s.zitadel_issuer.rstrip("/")
         self.redirect_uri = s.public_url.rstrip("/") + "/auth/callback"
         self.allowed = set(s.zitadel_user_subs)
-        self.pending: dict[str, tuple[str, float]] = {}  # state -> (pkce verifier, created)
+        self.pending: dict[str, tuple[str, float, str]] = {}  # state -> (pkce verifier, created, app challenge)
+        self.tickets: dict[str, tuple[str, dict[str, Any], float]] = {}  # ticket hash -> (challenge, session, created)
         self.meta: dict[str, Any] | None = None
 
     def user_key(self, sub: str) -> str:
@@ -63,19 +70,23 @@ class SSO:
             self.meta = r.json()
         return self.meta
 
-    async def login_url(self, client: httpx.AsyncClient) -> str:
+    async def login_url(self, client: httpx.AsyncClient, app_challenge: str = "") -> str:
+        """app_challenge: set when the Android app started this sign-in in a browser tab."""
+        if app_challenge and not _CHALLENGE.match(app_challenge):
+            raise ValueError("bad app challenge")
         meta = await self._discover(client)
         now = time.time()
         self.pending = {k: v for k, v in self.pending.items() if now - v[1] < PENDING_TTL}
         state, verifier, nonce = secrets.token_urlsafe(24), secrets.token_urlsafe(48), secrets.token_urlsafe(16)
-        self.pending[state] = (verifier, now)
+        self.pending[state] = (verifier, now, app_challenge)
         q = {"response_type": "code", "client_id": self.s.zitadel_client_id, "redirect_uri": self.redirect_uri,
              "scope": "openid profile email", "state": state, "nonce": nonce,
              "code_challenge": _b64url(hashlib.sha256(verifier.encode()).digest()), "code_challenge_method": "S256"}
         return meta["authorization_endpoint"] + "?" + urlencode(q)
 
     async def callback(self, client: httpx.AsyncClient, params: dict[str, str]) -> tuple[str, dict[str, Any]]:
-        """Returns (cookie token, session) or raises PermissionError / ValueError."""
+        """Returns (cookie token, session), or for a sign-in the app started, ("app:" + ticket, session);
+        raises PermissionError / ValueError."""
         if params.get("error"):
             raise PermissionError(params["error"])
         pend = self.pending.pop(params.get("state", ""), None)
@@ -95,13 +106,36 @@ class SSO:
         if sub not in self.allowed:
             log.warning("sign-in refused for sub %s (%s)", sub, info.get("preferred_username"))
             raise PermissionError("this account isn't allowed here")
-        token = secrets.token_urlsafe(32)
         session = {"sub": sub, "user": self.user_key(sub),
                    "name": info.get("given_name") or info.get("name") or info.get("preferred_username") or "",
                    "exp": time.time() + SESSION_TTL}
+        log.info("signed in: %s%s", info.get("preferred_username") or sub, " (app)" if pend[2] else "")
+        if pend[2]:
+            # The browser tab doesn't keep the session: the app redeems this ticket in its own WebView.
+            now = time.time()
+            self.tickets = {k: v for k, v in self.tickets.items() if now - v[2] < TICKET_TTL}
+            ticket = secrets.token_urlsafe(32)
+            self.tickets[token_hash(ticket)] = (pend[2], session, now)
+            return "app:" + ticket, session
+        return self._start(session), session
+
+    def _start(self, session: dict[str, Any]) -> str:
+        token = secrets.token_urlsafe(32)
         self.store.put_session(token_hash(token), **session)
-        log.info("signed in: %s", info.get("preferred_username") or sub)
-        return token, session
+        return token
+
+    def redeem(self, ticket: str, verifier: str) -> str:
+        """The app's half of a browser-tab sign-in: one use, within a minute, and only with the verifier
+        whose hash it sent when it started. Returns the session cookie token."""
+        entry = self.tickets.pop(token_hash(ticket or ""), None)
+        if not entry or time.time() - entry[2] > TICKET_TTL:
+            raise ValueError("that sign-in link expired; sign in again")
+        challenge, session, _ = entry
+        if not verifier or _b64url(hashlib.sha256(verifier.encode()).digest()) != challenge:
+            raise PermissionError("this sign-in link belongs to another app")
+        if session["sub"] not in self.allowed:
+            raise PermissionError("this account isn't allowed here")
+        return self._start(session)
 
     def session(self, token: str | None) -> dict[str, Any] | None:
         if not token:

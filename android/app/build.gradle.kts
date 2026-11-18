@@ -53,4 +53,6 @@ android {
 dependencies {
     // FileProvider: hand a photo to the Claude app (Ask Claude) without exposing a file path.
     implementation("androidx.core:core:1.13.1")
+    // Sign-in opens in a Chrome Custom Tab (passkeys work there) and comes back via liessure://signed-in.
+    implementation("androidx.browser:browser:1.8.0")
 }
