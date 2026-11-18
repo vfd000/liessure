@@ -42,6 +42,7 @@ DEFAULT_WEIGHTS = {
     "math": 2,
     "recall": 2,
     "todo": 2,
+    "infosec": 2,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
@@ -49,7 +50,7 @@ DEFAULT_WEIGHTS = {
 MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
-RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video"})
+RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec"})
 
 # Kinds only the owner sees: they read the owner's own services (jobs, lists, the lab).
 OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry"})
@@ -97,6 +98,17 @@ DEFAULT_HOMELAB_FEEDS = (
     "|https://noted.lol/rss/"
     "|https://www.lawrencesystems.com/feed/"
     "|https://www.home-assistant.io/atom.xml"
+)
+# Security research worth reading, besides Phrack (which has no feed: see sources.phrack_issue).
+DEFAULT_INFOSEC_FEEDS = (
+    "https://googleprojectzero.blogspot.com/feeds/posts/default"
+    "|https://portswigger.net/research/rss"
+    "|https://blog.trailofbits.com/feed/"
+    "|https://www.thezdi.com/blog?format=rss"
+    "|https://krebsonsecurity.com/feed/"
+    "|https://www.schneier.com/feed/atom/"
+    "|https://tldrsec.com/feed.xml"
+    "|https://lwn.net/headlines/rss"
 )
 DEFAULT_HOMELAB_TOPICS = (
     "homelab tour|home server rack build|homelab network design|proxmox homelab setup"
@@ -238,6 +250,10 @@ class Settings:
     homelab_topics: list[str] = field(default_factory=list)
     homelab_max_age_days: float = 30
 
+    infosec_feeds: list[str] = field(default_factory=list)
+    infosec_max_age_days: float = 30
+    phrack: bool = True
+
     # The household jobs service (vfd000/jobs): JOBS_TOKEN is its MCP_API_TOKEN.
     jobs: Service = field(default_factory=Service)
     jobs_token: str = ""
@@ -336,6 +352,9 @@ class Settings:
             homelab_feeds=parse_list(_env("HOMELAB_FEEDS", DEFAULT_HOMELAB_FEEDS)),
             homelab_topics=parse_list(_env("HOMELAB_TOPICS", DEFAULT_HOMELAB_TOPICS)),
             homelab_max_age_days=float(_env("HOMELAB_MAX_AGE_DAYS", "30")),
+            infosec_feeds=parse_list(_env("INFOSEC_FEEDS", DEFAULT_INFOSEC_FEEDS)),
+            infosec_max_age_days=float(_env("INFOSEC_MAX_AGE_DAYS", "30")),
+            phrack=_env("PHRACK", "1") not in ("0", "false", "no"),
             jobs=svc("JOBS"),
             jobs_token=_env("JOBS_TOKEN"),
             jobs_min_score=int(_env("JOBS_MIN_SCORE", "70")),
