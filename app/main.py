@@ -145,10 +145,27 @@ def create_app(
         return await call_next(request)
 
     @app.get("/auth/login")
-    async def login(request: Request):
+    async def login(request: Request, app: str = ""):
         if sso is None:
             return RedirectResponse("/", status_code=303)
-        return RedirectResponse(await sso.login_url(request.app.state.client), status_code=303)
+        try:
+            url = await sso.login_url(request.app.state.client, app_challenge=app)
+        except ValueError:
+            raise HTTPException(400, "bad app challenge")
+        return RedirectResponse(url, status_code=303)
+
+    @app.get("/auth/ticket")
+    async def ticket(request: Request, ticket: str = "", verifier: str = ""):
+        """The Android app finishing a sign-in it did in a browser tab (see auth.APP_RETURN)."""
+        if sso is None:
+            return RedirectResponse("/", status_code=303)
+        try:
+            token = sso.redeem(ticket, verifier)
+        except (ValueError, PermissionError) as e:
+            return Response(f"Not signed in: {e}", status_code=403, media_type="text/plain")
+        resp = RedirectResponse("/", status_code=303)
+        resp.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_TTL, httponly=True, secure=True, samesite="lax")
+        return resp
 
     @app.get("/auth/callback")
     async def callback(request: Request):
@@ -162,6 +179,9 @@ def create_app(
             log.warning("sign-in failed: %s: %s", type(e).__name__, e)
             return Response("Sign-in didn't complete. <a href=/auth/login>Try again</a>.", status_code=400,
                             media_type="text/html")
+        if token.startswith("app:"):
+            # Back to the app with a one-time ticket; the browser tab never gets a session.
+            return RedirectResponse(f"{auth.APP_RETURN}?ticket={token[4:]}", status_code=303)
         resp = RedirectResponse("/", status_code=303)
         resp.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_TTL, httponly=True, secure=True, samesite="lax")
         return resp

@@ -15,6 +15,10 @@
             <data android:scheme="https" />
         </intent>
         <intent>
+            <!-- Sign-in: find a browser that offers Custom Tabs -->
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+        <intent>
             <!-- Ask Claude: find apps (Claude first) that take a shared photo -->
             <action android:name="android.intent.action.SEND" />
             <data android:mimeType="image/*" />
@@ -55,6 +59,15 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- The end of a sign-in done in a browser tab: liessure://signed-in?ticket=... (one use, a minute,
+                 and only redeemable with the verifier this app kept, so another app catching it gets nothing). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="liessure" android:host="signed-in" />
             </intent-filter>
 
             <!-- Catch Reddit links. Not verifiable (not our domain), so turn it on

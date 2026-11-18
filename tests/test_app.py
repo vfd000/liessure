@@ -1424,3 +1424,37 @@ def test_career_exploration_cards(monkeypatch):
         sign_in(a, who, AXL)
         assert not a.get("/api/sources").json()["sources"]["career"]["configured"]
 
+
+def test_app_sign_in_through_a_browser_tab():
+    import base64
+    import hashlib
+    from urllib.parse import parse_qs, urlparse
+    who = [AXL]
+    app = create_app(sso_settings(), transport=httpx.MockTransport(sso_backend(who)), store=Store(":memory:"),
+                     run_curator=False)
+    verifier = "v" * 50
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    with TestClient(app, base_url="https://testserver") as tab:  # the Chrome tab
+        assert tab.get("/auth/login?app=nope", follow_redirects=False).status_code == 400
+        r = tab.get(f"/auth/login?app={challenge}", follow_redirects=False)
+        state = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+        r = tab.get("/auth/callback", params={"code": "c0de", "state": state}, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"].startswith("liessure://signed-in?ticket=")
+        assert "set-cookie" not in r.headers  # the tab never holds a session
+        ticket = parse_qs(urlparse(r.headers["location"]).query)["ticket"][0]
+    with TestClient(app, base_url="https://testserver") as other:  # an app that grabbed the link
+        assert other.get("/auth/ticket", params={"ticket": ticket, "verifier": "w" * 50},
+                         follow_redirects=False).status_code == 403
+    # One use: the failed attempt above already burnt it, so start over for the real app.
+    with TestClient(app, base_url="https://testserver") as tab:
+        r = tab.get(f"/auth/login?app={challenge}", follow_redirects=False)
+        state = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+        r = tab.get("/auth/callback", params={"code": "c0de", "state": state}, follow_redirects=False)
+        ticket = parse_qs(urlparse(r.headers["location"]).query)["ticket"][0]
+    with TestClient(app, base_url="https://testserver") as webview:  # the app's WebView
+        r = webview.get("/auth/ticket", params={"ticket": ticket, "verifier": verifier}, follow_redirects=False)
+        assert r.status_code == 303 and "liessure_session" in r.headers["set-cookie"]
+        assert webview.get("/api/me").json()["user"] == "owner"
+        assert webview.get("/auth/ticket", params={"ticket": ticket, "verifier": verifier},
+                           follow_redirects=False).status_code == 403  # used up
+
