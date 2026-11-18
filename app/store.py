@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS events (
     kind    TEXT NOT NULL,
     ref     TEXT NOT NULL DEFAULT '',
     action  TEXT NOT NULL,
-    title   TEXT NOT NULL DEFAULT ''
+    title   TEXT NOT NULL DEFAULT '',
+    user    TEXT NOT NULL DEFAULT 'owner'
 );
 CREATE INDEX IF NOT EXISTS events_kind_ts ON events (kind, ts);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -39,28 +40,35 @@ CREATE TABLE IF NOT EXISTS ideas (
     ts      REAL NOT NULL,
     text    TEXT NOT NULL,
     about   TEXT NOT NULL DEFAULT '',   -- the card it was about, "kind: title", if any
-    status  TEXT NOT NULL DEFAULT 'new' -- new | planned | done | dropped
+    status  TEXT NOT NULL DEFAULT 'new', -- new | planned | done | dropped
+    user    TEXT NOT NULL DEFAULT 'owner'
 );
 CREATE TABLE IF NOT EXISTS seen (          -- cards you opened or played, kept to quiz you on
     kind TEXT NOT NULL, ref TEXT NOT NULL, title TEXT NOT NULL, subtitle TEXT NOT NULL DEFAULT '',
     text TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', ts REAL NOT NULL,
     asked INTEGER NOT NULL DEFAULT 0,          -- 1 once the curator has written (or declined) a question
-    PRIMARY KEY (kind, ref)
+    user TEXT NOT NULL DEFAULT 'owner',
+    PRIMARY KEY (user, kind, ref)
 );
 CREATE TABLE IF NOT EXISTS recall (
     id INTEGER PRIMARY KEY, kind TEXT NOT NULL, ref TEXT NOT NULL,
     question TEXT NOT NULL, choices TEXT NOT NULL, answer INTEGER NOT NULL, explain TEXT NOT NULL DEFAULT '',
     box INTEGER NOT NULL DEFAULT 0,            -- Leitner box: how many times in a row you've got it
-    due REAL NOT NULL, created REAL NOT NULL
+    due REAL NOT NULL, created REAL NOT NULL, user TEXT NOT NULL DEFAULT 'owner'
 );
-CREATE TABLE IF NOT EXISTS recall_answers (ts REAL NOT NULL, recall_id INTEGER NOT NULL, correct INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS recall_answers (ts REAL NOT NULL, recall_id INTEGER NOT NULL, correct INTEGER NOT NULL,
+    user TEXT NOT NULL DEFAULT 'owner');
 CREATE TABLE IF NOT EXISTS todo_estimates (  -- how long a to-do item takes, redone when its text changes
     item_id INTEGER PRIMARY KEY, text_hash TEXT NOT NULL, minutes INTEGER NOT NULL,
     label TEXT NOT NULL, assumption TEXT NOT NULL DEFAULT '', ts REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS math_attempts (   -- every math card answered: right, tries, gave up
     ts REAL NOT NULL, ref TEXT NOT NULL, topic TEXT NOT NULL, correct INTEGER NOT NULL,
-    tries INTEGER NOT NULL, revealed INTEGER NOT NULL
+    tries INTEGER NOT NULL, revealed INTEGER NOT NULL, user TEXT NOT NULL DEFAULT 'owner'
+);
+CREATE TABLE IF NOT EXISTS sessions (          -- signed-in browsers: sha256 of the cookie token
+    token_hash TEXT PRIMARY KEY, sub TEXT NOT NULL, user TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+    exp REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS rejected (
     kind TEXT NOT NULL, ref TEXT NOT NULL, ts REAL NOT NULL, PRIMARY KEY (kind, ref)
@@ -83,14 +91,52 @@ class Store:
         self._lock = threading.Lock()
         with self._lock:
             self._db.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Databases from before multi-user: add the user column (their rows are the owner's)."""
+        def cols(table: str) -> set[str]:
+            return {r["name"] for r in self._db.execute(f"PRAGMA table_info({table})").fetchall()}
+        for table in ("events", "ideas", "recall", "recall_answers", "math_attempts"):
+            if "user" not in cols(table):
+                self._db.execute(f"ALTER TABLE {table} ADD COLUMN user TEXT NOT NULL DEFAULT 'owner'")
+        if "user" not in cols("seen"):  # the primary key changes, so copy into a new table
+            self._db.executescript("""
+                ALTER TABLE seen RENAME TO seen_v1;
+                CREATE TABLE seen (
+                    kind TEXT NOT NULL, ref TEXT NOT NULL, title TEXT NOT NULL, subtitle TEXT NOT NULL DEFAULT '',
+                    text TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '', ts REAL NOT NULL,
+                    asked INTEGER NOT NULL DEFAULT 0, user TEXT NOT NULL DEFAULT 'owner',
+                    PRIMARY KEY (user, kind, ref));
+                INSERT INTO seen (kind, ref, title, subtitle, text, url, ts, asked, user)
+                    SELECT kind, ref, title, subtitle, text, url, ts, asked, 'owner' FROM seen_v1;
+                DROP TABLE seen_v1;""")
+        self._db.commit()
+
+    # --- sessions
+    def put_session(self, token_hash: str, sub: str, user: str, name: str, exp: float) -> None:
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM sessions WHERE exp < ?", (time.time(),))
+            self._db.execute("INSERT OR REPLACE INTO sessions (token_hash, sub, user, name, exp) VALUES (?, ?, ?, ?, ?)",
+                             (token_hash, sub, user, name, exp))
+
+    def get_session(self, token_hash: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute("SELECT * FROM sessions WHERE token_hash = ?", (token_hash,)).fetchone()
+        return dict(row) if row else None
+
+    def delete_session(self, token_hash: str) -> None:
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
 
     # --- recall: quiz questions about cards you opened, spaced out
-    def remember_card(self, kind: str, ref: str, title: str, subtitle: str, text: str, url: str) -> None:
+    def remember_card(self, kind: str, ref: str, title: str, subtitle: str, text: str, url: str,
+                      user: str = "owner") -> None:
         with self._lock, self._db:
             self._db.execute(
-                "INSERT INTO seen (kind, ref, title, subtitle, text, url, ts) VALUES (?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (kind, ref) DO UPDATE SET ts = excluded.ts",
-                (kind, ref[:128], title[:300], subtitle[:300], text[:2000], url[:1000], time.time()),
+                "INSERT INTO seen (kind, ref, title, subtitle, text, url, ts, user) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (user, kind, ref) DO UPDATE SET ts = excluded.ts",
+                (kind, ref[:128], title[:300], subtitle[:300], text[:2000], url[:1000], time.time(), user),
             )
 
     def cards_to_ask(self, limit: int = 8, min_age_hours: float = 6) -> list[dict[str, Any]]:
@@ -102,32 +148,35 @@ class Store:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def add_recall(self, kind: str, ref: str, question: str, choices: list[str], answer: int, explain: str) -> int:
+    def add_recall(self, kind: str, ref: str, question: str, choices: list[str], answer: int, explain: str,
+                   user: str = "owner") -> int:
         now = time.time()
         with self._lock, self._db:
-            seen = self._db.execute("SELECT ts FROM seen WHERE kind = ? AND ref = ?", (kind, ref)).fetchone()
+            seen = self._db.execute("SELECT ts FROM seen WHERE user = ? AND kind = ? AND ref = ?",
+                                    (user, kind, ref)).fetchone()
             first = max(now, (seen["ts"] if seen else now) + RECALL_INTERVALS[0] * 86400)
             cur = self._db.execute(
-                "INSERT INTO recall (kind, ref, question, choices, answer, explain, due, created) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (kind, ref, question, json.dumps(choices), answer, explain, first, now),
+                "INSERT INTO recall (kind, ref, question, choices, answer, explain, due, created, user) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (kind, ref, question, json.dumps(choices), answer, explain, first, now, user),
             )
-            self._db.execute("UPDATE seen SET asked = 1 WHERE kind = ? AND ref = ?", (kind, ref))
+            self._db.execute("UPDATE seen SET asked = 1 WHERE user = ? AND kind = ? AND ref = ?", (user, kind, ref))
         return int(cur.lastrowid)
 
-    def mark_asked(self, kind: str, ref: str) -> None:
+    def mark_asked(self, kind: str, ref: str, user: str = "owner") -> None:
         with self._lock, self._db:
-            self._db.execute("UPDATE seen SET asked = 1 WHERE kind = ? AND ref = ?", (kind, ref))
+            self._db.execute("UPDATE seen SET asked = 1 WHERE user = ? AND kind = ? AND ref = ?", (user, kind, ref))
 
-    def due_recall(self, snooze_hours: float = 2) -> dict[str, Any] | None:
+    def due_recall(self, user: str = "owner", snooze_hours: float = 2) -> dict[str, Any] | None:
         """The most overdue question, with the card it's about. Snoozed a little once served, so a
         refresh doesn't ask it again straight away; answering sets the real next date."""
         now = time.time()
         with self._lock, self._db:
             row = self._db.execute(
                 "SELECT r.*, s.title AS card_title, s.url AS card_url, s.ts AS seen_ts FROM recall r "
-                "LEFT JOIN seen s ON s.kind = r.kind AND s.ref = r.ref WHERE r.due <= ? ORDER BY r.due LIMIT 1",
-                (now,),
+                "LEFT JOIN seen s ON s.user = r.user AND s.kind = r.kind AND s.ref = r.ref "
+                "WHERE r.user = ? AND r.due <= ? ORDER BY r.due LIMIT 1",
+                (user, now),
             ).fetchone()
             if not row:
                 return None
@@ -136,35 +185,35 @@ class Store:
         out["choices"] = json.loads(out["choices"])
         return out
 
-    def answer_recall(self, recall_id: int, correct: bool) -> dict[str, Any] | None:
+    def answer_recall(self, recall_id: int, correct: bool, user: str = "owner") -> dict[str, Any] | None:
         now = time.time()
         with self._lock, self._db:
-            row = self._db.execute("SELECT box FROM recall WHERE id = ?", (recall_id,)).fetchone()
+            row = self._db.execute("SELECT box FROM recall WHERE id = ? AND user = ?", (recall_id, user)).fetchone()
             if not row:
                 return None
             box = min(row["box"] + 1, len(RECALL_INTERVALS) - 1) if correct else 0
             days = RECALL_INTERVALS[box] if correct else RECALL_INTERVALS[0]
             self._db.execute("UPDATE recall SET box = ?, due = ? WHERE id = ?", (box, now + days * 86400, recall_id))
-            self._db.execute("INSERT INTO recall_answers (ts, recall_id, correct) VALUES (?, ?, ?)",
-                             (now, recall_id, int(correct)))
-        return {"box": box, "next_in_days": days, **self.recall_stats()}
+            self._db.execute("INSERT INTO recall_answers (ts, recall_id, correct, user) VALUES (?, ?, ?, ?)",
+                             (now, recall_id, int(correct), user))
+        return {"box": box, "next_in_days": days, **self.recall_stats(user)}
 
-    def recall_stats(self, days: float = 30) -> dict[str, int]:
+    def recall_stats(self, user: str = "owner", days: float = 30) -> dict[str, int]:
         with self._lock:
             row = self._db.execute(
-                "SELECT COUNT(*) n, COALESCE(SUM(correct), 0) ok FROM recall_answers WHERE ts >= ?",
-                (time.time() - days * 86400,),
+                "SELECT COUNT(*) n, COALESCE(SUM(correct), 0) ok FROM recall_answers WHERE user = ? AND ts >= ?",
+                (user, time.time() - days * 86400),
             ).fetchone()
         return {"answered_30d": row["n"], "correct_30d": row["ok"]}
 
     # --- math progress
-    def record_math(self, ref: str, topic: str, correct: bool, tries: int, revealed: bool) -> None:
+    def record_math(self, ref: str, topic: str, correct: bool, tries: int, revealed: bool, user: str = "owner") -> None:
         with self._lock, self._db:
             self._db.execute(
-                "INSERT INTO math_attempts (ts, ref, topic, correct, tries, revealed) VALUES (?, ?, ?, ?, ?, ?)",
-                (time.time(), ref[:64], topic[:40], int(correct), tries, int(revealed)))
+                "INSERT INTO math_attempts (ts, ref, topic, correct, tries, revealed, user) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (time.time(), ref[:64], topic[:40], int(correct), tries, int(revealed), user))
 
-    def math_stats(self, now: float | None = None) -> dict[str, Any]:
+    def math_stats(self, now: float | None = None, user: str = "owner") -> dict[str, Any]:
         """Today, this week (from Monday), the daily streak and the weakest topic of the last 30 days.
         Days are local to the server (the CT runs on household time)."""
         import datetime as _dt
@@ -174,7 +223,8 @@ class Store:
         monday = midnight - today.weekday() * 86400
         with self._lock:
             rows = self._db.execute(
-                "SELECT ts, topic, correct, revealed FROM math_attempts WHERE ts >= ?", (now - 400 * 86400,)
+                "SELECT ts, topic, correct, revealed FROM math_attempts WHERE user = ? AND ts >= ?",
+                (user, now - 400 * 86400)
             ).fetchall()
 
         def tally(since: float) -> dict[str, int]:
@@ -207,10 +257,10 @@ class Store:
                 "VALUES (?, ?, ?, ?, ?, ?)", (item_id, text_hash, minutes, label, assumption, time.time()))
 
     # --- ideas: improvements jotted down in the app, to build later
-    def add_idea(self, text: str, about: str = "") -> int:
+    def add_idea(self, text: str, about: str = "", user: str = "owner") -> int:
         with self._lock, self._db:
-            cur = self._db.execute("INSERT INTO ideas (ts, text, about) VALUES (?, ?, ?)",
-                                   (time.time(), text, about))
+            cur = self._db.execute("INSERT INTO ideas (ts, text, about, user) VALUES (?, ?, ?, ?)",
+                                   (time.time(), text, about, user))
         return int(cur.lastrowid)
 
     def ideas(self, limit: int = 200) -> list[dict[str, Any]]:
@@ -224,17 +274,17 @@ class Store:
         return cur.rowcount == 1
 
     # --- events
-    def record(self, kind: str, ref: str, action: str, title: str = "") -> None:
+    def record(self, kind: str, ref: str, action: str, title: str = "", user: str = "owner") -> None:
         with self._lock, self._db:
             self._db.execute(
-                "INSERT INTO events (ts, kind, ref, action, title) VALUES (?, ?, ?, ?, ?)",
-                (time.time(), kind, ref[:128], action[:16], title[:300]),
+                "INSERT INTO events (ts, kind, ref, action, title, user) VALUES (?, ?, ?, ?, ?, ?)",
+                (time.time(), kind, ref[:128], action[:16], title[:300], user),
             )
 
     def recent_refs(self, kind: str, limit: int = 10) -> list[str]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT ref, MAX(ts) t FROM events WHERE kind = ? AND ref != '' "
+                "SELECT ref, MAX(ts) t FROM events WHERE user = 'owner' AND kind = ? AND ref != '' "
                 "GROUP BY ref ORDER BY t DESC LIMIT ?",
                 (kind, limit),
             ).fetchall()
@@ -243,7 +293,7 @@ class Store:
     def recent_titles(self, kind: str, limit: int = 15) -> list[str]:
         with self._lock:
             rows = self._db.execute(
-                "SELECT title, MAX(ts) t FROM events WHERE kind = ? AND title != '' "
+                "SELECT title, MAX(ts) t FROM events WHERE user = 'owner' AND kind = ? AND title != '' "
                 "GROUP BY title ORDER BY t DESC LIMIT ?",
                 (kind, limit),
             ).fetchall()
@@ -253,7 +303,7 @@ class Store:
         """(kind, title) of distinct things opened or played, newest first."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT kind, title, MAX(ts) t FROM events WHERE ts >= ? AND title != '' "
+                "SELECT kind, title, MAX(ts) t FROM events WHERE user = 'owner' AND ts >= ? AND title != '' "
                 "GROUP BY kind, title ORDER BY t DESC",
                 (time.time() - days * 86400,),
             ).fetchall()

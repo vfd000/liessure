@@ -166,6 +166,25 @@ Opens and plays are recorded via `POST /api/event`, which seeds the "more
 like" column. `POST /api/curate[?kind=]` runs a pass now. State is SQLite on
 the `liessure-data` volume.
 
+## Sign-in (Zitadel)
+
+Off until `ZITADEL_CLIENT_ID`, `ZITADEL_CLIENT_SECRET` and `ZITADEL_USER_SUBS`
+are all in `.env` (`deploy/sso-bootstrap.sh` sets them: run it yourself, it
+writes to 1Password). Then every page and API call needs a session:
+authorization code + PKCE against `sso.liess.tv`, identity from userinfo, an
+allowlist of subs checked on every request (fail closed), and a 30-day
+httpOnly session cookie whose sha256 is kept in SQLite.
+
+- The owner (`OWNER_SUB`, axl) keeps all existing data (it's keyed `owner`) and
+  sees everything. Everyone else gets their own history, recall questions,
+  math progress and ideas, and no job, skill, to-do or lab-health cards (those
+  read the owner's own services).
+- The curated pool is still picked for the owner's profile; others get fresh
+  cards until per-user curation (next).
+- Off the home network, the first sign-in needs a gatekeeper IP
+  authorisation (sso.liess.tv has no mTLS door); the session then lasts 30 days.
+- `GET /api/me` says who's signed in; `/auth/logout` signs out.
+
 ## API
 
 - `GET /api/feed?n=6&kinds=photo,game` — a batch of cards (no kind twice in a row)
