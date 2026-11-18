@@ -52,6 +52,27 @@ PHRACK_HTML = """<html><head><link rel="canonical" href="https://phrack.org/issu
 </body></html>"""
 
 
+PHRACK_TEXT = """<html><body><pre>
+|=-----------------------------------------------------------------------=|
+|=----------------=[ Word Machines for Weird Machines ]=-----------------=|
+|=-----------------------------------------------------------------------=|
+|=--------------------------=[ noperator ]=------------------------------=|
+|=-----------------------------------------------------------------------=|
+
+--[ 0 - Intro
+
+Phrack is said to be a snapshot of hacker culture at each issue, so I
+should open by illustrating my own first-person PoV at the time of this
+writing &amp; more.
+
+    int main(void) {
+        return 0;
+    }
+
+--[ 1 - Results
+</pre></body></html>"""
+
+
 def fake_backend(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
     host, path, q = request.url.host, request.url.path, request.url.params
@@ -101,6 +122,8 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
                       "sensor.envoy_1_lifetime_energy_consumption": ["19.980", "19.999", "20.000"]}[eid]
             times = ["2026-11-15T23:59:00-08:00", "2026-11-16T23:59:00-08:00", "2026-11-17T08:00:00-08:00"]
             return httpx.Response(200, json=[[{"state": v, "last_changed": t} for v, t in zip(series, times)]])
+    if host == "phrack.org" and path == "/issues/73/word-machines-for-weird-machines.html":
+        return httpx.Response(200, text=PHRACK_TEXT)
     if host == "phrack.org" and path == "/index_latest.html":
         return httpx.Response(200, text=PHRACK_HTML)
     if host == "jobs.test" and path.startswith("/api/"):
@@ -1216,7 +1239,8 @@ def test_infosec_cards_are_phrack_articles_and_feeds(client):
     phrack = [c for c in cards if c["label"] == "Infosec · Phrack #73"]
     assert {c["title"] for c in phrack} == {"Escaping from a Docker container through vDSO",
                                            "Beyond the Facade :: Exposing Smart Giants"}
-    assert all(c["url"].startswith("https://phrack.org/issues/73/") and "#" not in c["url"] for c in phrack)
+    assert all(c["url"].startswith("https://liessure.liess.tv/read/phrack/73/") and c["open_in_app"] for c in phrack)
+    assert all(c["actions"][0]["url"].startswith("https://phrack.org/issues/73/") for c in phrack)
     assert any(c["label"] == "Infosec · Atom Daily" for c in cards)
 
 
@@ -1270,4 +1294,16 @@ def test_series_cards_are_specific_episodes(client):
     assert ep["url"] == "https://jellyfin.example/web/#/details?id=e0e0e0e1&serverId=srv" and ep["open_in_app"]
     assert ep["image"].endswith("%2FItems%2Fe0e0e0e1%2FImages%2FPrimary%3FmaxWidth%3D720%26quality%3D85")
     assert titles["Next up on Jellyfin"]["title"] == "Hunted"
+
+
+def test_phrack_reader_reflows_text(client):
+    r = client.get("/read/phrack/73/word-machines-for-weird-machines_md")
+    assert r.status_code == 200
+    h = r.text
+    assert "<h1>Word Machines for Weird Machines</h1>" in h and "noperator · Phrack #73" in h
+    assert "<h2>0 - Intro</h2>" in h and "<h2>1 - Results</h2>" in h
+    assert "<p>Phrack is said to be a snapshot of hacker culture at each issue, so I should open by" in h
+    assert "writing &amp; more.</p>" in h
+    assert "<pre>    int main(void) {\n        return 0;\n    }</pre>" in h
+    assert client.get("/read/phrack/73/..%2Fetc").status_code == 404
 

@@ -975,9 +975,12 @@ async def infosec(client: httpx.AsyncClient, s: Settings, rng: random.Random) ->
                 raise Unavailable("no Phrack articles found")
             n = rng.randrange(len(articles))
             slug, title = articles[n]
+            # Open goes to Liessure's reader: Phrack's own pages are hard-wrapped text, ragged on a phone.
             return Card(kind="infosec", label=f"Infosec · Phrack #{issue}", title=title,
                         blurb=f"Article {n + 1} of {len(articles)} in Phrack issue {issue}.",
-                        url=f"{PHRACK}/issues/{issue}/{slug}.html", ref=f"phrack:{issue}:{slug}")
+                        url=f"{s.public_url}/read/phrack/{issue}/{slug}", open_in_app=True,
+                        actions=[{"label": "Original", "url": f"{PHRACK}/issues/{issue}/{slug}.html"}],
+                        ref=f"phrack:{issue}:{slug}")
         options.append((phrack, 3))
     if s.infosec_feeds:
         async def feed() -> Card:

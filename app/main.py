@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel, Field
 
-from . import auth, curator, profile, sources
+from . import auth, curator, profile, reader, sources
 from .config import KINDS, MAX_PER_LOAD, OWNER_ONLY_KINDS, RECALL_KINDS, Settings
 from .store import Store
 
@@ -274,6 +274,24 @@ def create_app(
         """A math card answered (or given up on): kept for progress, returns it."""
         store.record_math(a.ref, a.topic, a.correct, a.tries, a.revealed, user=request.state.user)
         return store.math_stats(user=request.state.user)
+
+    _read_cache: dict[tuple[int, str], str] = {}
+
+    @app.get("/read/phrack/{issue}/{slug}")
+    async def read_phrack(request: Request, issue: int, slug: str):
+        """A Phrack article reflowed for a phone (see reader.py)."""
+        if not (1 <= issue <= 999 and reader.SLUG.match(slug)):
+            raise HTTPException(404)
+        key = (issue, slug)
+        if key not in _read_cache:
+            try:
+                _read_cache[key] = reader.page(issue, slug, await reader.fetch_text(request.app.state.client, issue, slug))
+            except (httpx.HTTPError, ValueError) as e:
+                log.warning("phrack reader %s/%s: %s", issue, slug, e)
+                return RedirectResponse(f"{reader.PHRACK}/issues/{issue}/{slug}.html", status_code=302)
+            if len(_read_cache) > 200:
+                _read_cache.pop(next(iter(_read_cache)))
+        return Response(_read_cache[key], media_type="text/html", headers={"Cache-Control": "private, max-age=3600"})
 
     @app.post("/api/photo/{asset_id}/identify")
     async def identify(request: Request, asset_id: str):
