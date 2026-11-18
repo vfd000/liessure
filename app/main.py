@@ -74,6 +74,11 @@ class FromCard(BaseModel):
     card: dict = Field(...)
 
 
+class CardToTodo(BaseModel):
+    card: dict = Field(...)
+    why: str = Field(pattern="^(study|implement)$")
+
+
 class RouteFor(BaseModel):
     card: dict = Field(...)
 
@@ -253,7 +258,8 @@ def create_app(
     async def me(request: Request):
         user = request.state.user
         return {"user": user, "name": request.state.name, "owner": user == auth.OWNER,
-                "sso": sso is not None, "lang": prefs_for(user).get("lang", "en")}
+                "sso": sso is not None, "lang": prefs_for(user).get("lang", "en"),
+                "todo": user == auth.OWNER and bool(settings.lists.url and settings.lists_token)}
 
     def prefs_for(user: str) -> dict:
         return settings.user_prefs.get(settings.owner_sub if user == auth.OWNER else user, {}) or {}
@@ -690,6 +696,22 @@ def create_app(
         deck = store.deck_by_name(name, user) or store.add_deck(name, user, source="feed")
         store.add_flashcards(deck, made, user)
         return {"deck": deck, "made": [{"front": f, "back": b} for f, b in made]}
+
+    @app.post("/api/todo/from-card")
+    async def todo_from_card(request: Request, body: CardToTodo):
+        """A card onto the household To Do list, to study further or to implement. The owner's list, so the owner only."""
+        if request.state.user != auth.OWNER:
+            raise HTTPException(403, "the To Do list is the owner's")
+        if not (settings.lists.url and settings.lists_token):
+            raise HTTPException(409, "the lists service isn't configured")
+        if not str(body.card.get("title") or "").strip():
+            raise HTTPException(422, "the card has no title")
+        try:
+            item = await sources.add_todo(request.app.state.client, settings, body.card, body.why)
+        except httpx.HTTPError as e:
+            log.warning("todo from card: %s", e)
+            raise HTTPException(502, f"the lists service didn't take it: {type(e).__name__}")
+        return {"id": item.get("id"), "text": item.get("text")}
 
     @app.post("/api/geo/route")
     async def geo_route(request: Request, body: RouteFor):

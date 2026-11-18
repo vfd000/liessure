@@ -1204,7 +1204,7 @@ def test_sign_in_and_per_user_feeds():
         r = sign_in(c, who, AXL)
         assert r.status_code == 303 and "liessure_session" in r.headers["set-cookie"]
         assert "httponly" in r.headers["set-cookie"].lower() and "secure" in r.headers["set-cookie"].lower()
-        assert c.get("/api/me").json() == {"user": "owner", "name": "Axl", "owner": True, "sso": True, "lang": "en"}
+        assert c.get("/api/me").json() == {"user": "owner", "name": "Axl", "owner": True, "sso": True, "lang": "en", "todo": False}
         assert c.get("/api/sources").json()["sources"]["job"]["configured"]
         c.post("/api/math", json={"ref": "m", "topic": "algebra", "correct": True})
 
@@ -1814,4 +1814,29 @@ def test_a_card_describing_a_route_gets_map_points(monkeypatch):
         assert len(asked) == 1 and looked_up[0][1] == "-123.5,48.7,-120.5,46.7"
         plain = {"title": "Lighthouse", "blurb": "A tower with a light."}
         assert c.post("/api/geo/route", json={"card": plain}).json() == {"points": []}
+
+
+def test_a_card_goes_onto_the_todo_list():
+    added = []
+
+    def backend(request):
+        if request.url.host == "lists.test" and request.method == "POST":
+            assert request.headers["authorization"] == "Bearer lt"
+            added.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(201, json={"id": 41, **json.loads(request.content)})
+        return fake_backend(request)
+    s = full_settings(lists=Service("http://lists.test", "https://lists.example"), lists_token="lt")
+    card = {"title": "Deathplanswitch", "blurb": "A dead man's switch for your homelab.",
+            "url": "https://noted.lol/deathplanswitch/"}
+    with make_client(s, handler=backend) as c:
+        assert c.get("/api/me").json()["todo"] is True
+        r = c.post("/api/todo/from-card", json={"card": card, "why": "implement"})
+        assert r.status_code == 200 and r.json() == {"id": 41, "text": "Implement: Deathplanswitch"}
+        assert c.post("/api/todo/from-card", json={"card": card, "why": "delete"}).status_code == 422
+    assert added == [("/lists/6/items", {"text": "Implement: Deathplanswitch",
+                                         "notes": "From Liessure. A dead man's switch for your homelab.",
+                                         "link_url": "https://noted.lol/deathplanswitch/"})]
+    with make_client(full_settings()) as c:
+        assert c.get("/api/me").json()["todo"] is False
+        assert c.post("/api/todo/from-card", json={"card": card, "why": "study"}).status_code == 409
 

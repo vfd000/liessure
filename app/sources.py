@@ -1643,9 +1643,26 @@ async def home(client: httpx.AsyncClient, s: Settings, rng: random.Random, now: 
 _todo_cache = _TTLCache(300)
 
 
+TODO_FROM_CARD = {"study": "Study", "implement": "Implement"}
+
+
+async def add_todo(client: httpx.AsyncClient, s: Settings, card: dict[str, Any], why: str) -> dict[str, Any]:
+    """A feed card onto the To Do list ("Study: …" / "Implement: …"), linking back to it. With ticking items
+    off (set_todo_checked), the only writes Liessure makes to the lists service."""
+    title = " ".join(str(card.get("title") or "").split())[:200]
+    url = str(card.get("url") or "")
+    notes = _clip(" ".join(str(card.get(k) or "") for k in ("subtitle", "blurb")), 500)
+    body = {"text": f"{TODO_FROM_CARD[why]}: {title}", "notes": f"From Liessure. {notes}".strip(),
+            "link_url": url if url.startswith(("https://", "http://")) else None}
+    r = await client.post(f"{s.lists.url}/lists/{s.todo_list_id}/items", json=body,
+                          headers={"Authorization": f"Bearer {s.lists_token}"})
+    r.raise_for_status()
+    _todo_cache._data.clear()
+    return r.json()
+
+
 async def set_todo_checked(client: httpx.AsyncClient, s: Settings, item_id: int, checked: bool) -> None:
-    """Tick (or untick) one item on the To Do list: swiping its card to Done checks it off. The only write
-    Liessure makes to the lists service."""
+    """Tick (or untick) one item on the To Do list: swiping its card to Done checks it off."""
     r = await client.patch(f"{s.lists.url}/lists/{s.todo_list_id}/items/{item_id}", json={"checked": checked},
                            headers={"Authorization": f"Bearer {s.lists_token}"})
     r.raise_for_status()
