@@ -187,6 +187,9 @@ def create_app(
         if kind == "recall":
             row = store.due_recall(user)
             return sources.recall_card(row).to_dict() if row else None
+        if kind == "bite":
+            pick = store.take("bite", rng.random())
+            return pick["card"] if pick else None
         if kind == "todo":
             return await todo_card(client, rng)
         # Mostly the curated pool; a share of uncurated cards keeps some surprise in it.

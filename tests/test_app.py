@@ -118,6 +118,10 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
         if path == "/api/pipeline":
             return httpx.Response(200, json={"board": {"interviewing": [
                 job(9, status="interviewing", next_step="Onsite loop", next_step_on="2026-11-18T09:00:00")]}})
+    if host.endswith("wikipedia.org") and path == "/w/api.php" and q.get("list") == "search":
+        return httpx.Response(200, json={"query": {"search": [{"title": "Geology of the Pacific Northwest"}]}})
+    if host.endswith("wikipedia.org") and path == "/w/api.php" and q.get("prop") == "extracts":
+        return httpx.Response(200, json={"query": {"pages": [{"extract": "The Cascade Volcanoes run north to south. " * 40}]}})
     if host.endswith("wikipedia.org") and path == "/w/api.php":
         gen = q["generator"]
         lang = host.split(".")[0]
@@ -236,7 +240,7 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind in ("recall", "todo"):
+        if kind in ("recall", "todo", "bite"):
             continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
@@ -1203,4 +1207,29 @@ def test_infosec_cards_are_phrack_articles_and_feeds(client):
                                            "Beyond the Facade :: Exposing Smart Giants"}
     assert all(c["url"].startswith("https://phrack.org/issues/73/") and "#" not in c["url"] for c in phrack)
     assert any(c["label"] == "Infosec · Atom Daily" for c in cards)
+
+
+def test_bites_come_from_the_article_and_serve_from_the_pool():
+    import asyncio
+    st = Store(":memory:")
+    seen = {}
+
+    async def ask(client, s, prompt, system=None):
+        seen["prompt"], seen["system"] = prompt, system
+        return json.dumps({"bites": [
+            {"title": "The Cascade volcanoes are one chain", "body": "They run north to south, fed by one subducting plate."},
+            {"title": "", "body": "dropped"}]})
+    s = full_settings(llm_url="http://llm.test", llm_key="k", wiki_interests=["Pacific Northwest geology"])
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(fake_backend)) as hc:
+            return await curator.generate_bites(hc, s, st, random.Random(1), ask=ask)
+    assert asyncio.run(run()) == 1
+    assert "ONLY facts stated in the article" in seen["system"] and "Cascade Volcanoes run north" in seen["prompt"]
+    assert asyncio.run(run()) == 0  # that article's bites are already in the pool
+    app = create_app(s, transport=httpx.MockTransport(fake_backend), store=st, run_curator=False)
+    with TestClient(app) as c:
+        card = c.get("/api/card/bite").json()
+    assert card["title"] == "The Cascade volcanoes are one chain" and card["label"] == "Bite-size · Pacific Northwest geology"
+    assert card["url"] == "https://en.m.wikipedia.org/wiki/Geology_of_the_Pacific_Northwest"
 

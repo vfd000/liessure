@@ -43,6 +43,7 @@ DEFAULT_WEIGHTS = {
     "recall": 2,
     "todo": 2,
     "infosec": 2,
+    "bite": 3,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
@@ -50,7 +51,7 @@ DEFAULT_WEIGHTS = {
 MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
-RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec"})
+RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite"})
 
 # Kinds only the owner sees: they read the owner's own services (jobs, lists, the lab).
 OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry"})
