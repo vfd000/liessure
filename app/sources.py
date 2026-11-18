@@ -849,6 +849,73 @@ async def homelab(client: httpx.AsyncClient, s: Settings, rng: random.Random) ->
     raise Unavailable(f"home-lab sources failed: {last}")
 
 
+# ------------------------------------------------------------------ infosec
+# Security reading: each article of the latest Phrack issue as its own card, and
+# research write-ups from a few feeds.
+
+_infosec_cache = _TTLCache(3 * 3600)
+_phrack_cache = _TTLCache(6 * 3600)
+PHRACK = "https://phrack.org"
+_PHRACK_ISSUE = re.compile(r'canonical" href="https://phrack\.org/issues/(\d+)/')
+_PHRACK_ARTICLE = re.compile(r'href="/issues/(\d+)/([a-z0-9_-]+)\.html#article">([^<]+)<')
+_PHRACK_SKIP = {"introduction", "introduction_md"}
+
+
+async def phrack_issue(client: httpx.AsyncClient) -> tuple[int, list[tuple[str, str]]]:
+    """(issue number, [(slug, title)]) for the latest issue, from its table of contents."""
+    hit = _phrack_cache.get("latest")
+    if hit is not None:
+        return hit
+    r = await client.get(f"{PHRACK}/index_latest.html", headers={"User-Agent": "Mozilla/5.0 (Liessure)"})
+    r.raise_for_status()
+    m = _PHRACK_ISSUE.search(r.text)
+    if not m:
+        raise Unavailable("can't tell which Phrack issue is latest")
+    issue = int(m.group(1))
+    seen: dict[str, str] = {}
+    for num, slug, title in _PHRACK_ARTICLE.findall(r.text):
+        if int(num) == issue and slug not in _PHRACK_SKIP:
+            seen.setdefault(slug, html.unescape(title).strip())
+    out = (issue, list(seen.items()))
+    _phrack_cache.put("latest", out)
+    return out
+
+
+async def infosec(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    options: list[tuple[Callable[[], Awaitable[Card]], int]] = []
+    if s.phrack:
+        async def phrack() -> Card:
+            issue, articles = await phrack_issue(client)
+            if not articles:
+                raise Unavailable("no Phrack articles found")
+            n = rng.randrange(len(articles))
+            slug, title = articles[n]
+            return Card(kind="infosec", label=f"Infosec · Phrack #{issue}", title=title,
+                        blurb=f"Article {n + 1} of {len(articles)} in Phrack issue {issue}.",
+                        url=f"{PHRACK}/issues/{issue}/{slug}.html", ref=f"phrack:{issue}:{slug}")
+        options.append((phrack, 3))
+    if s.infosec_feeds:
+        async def feed() -> Card:
+            items = await feed_items(client, s.infosec_feeds, s.infosec_max_age_days * 24, _infosec_cache)
+            if not items:
+                raise Unavailable("security feeds had nothing recent")
+            item = rng.choice(items)
+            card = news_card(item)
+            card.kind, card.label = "infosec", f"Infosec · {item['source']}" if item.get("source") else "Infosec"
+            return card
+        options.append((feed, 4))
+    if not options:
+        raise Unavailable("no infosec sources")
+    last: Exception | None = None
+    for _ in range(2):
+        fn = rng.choices([o for o, _ in options], weights=[w for _, w in options])[0]
+        try:
+            return await fn()
+        except (Unavailable, httpx.HTTPError, KeyError, ValueError) as e:
+            last = e
+    raise Unavailable(f"infosec sources failed: {last}")
+
+
 # --------------------------------------------------------------------- jobs
 # The household jobs service (vfd000/jobs). Job descriptions are scraped web
 # text: they're shown as data and never reach the curator or the interest
@@ -1545,6 +1612,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "math": math,
     "recall": recall,
     "todo": todo,
+    "infosec": infosec,
 }
 
 
@@ -1567,4 +1635,5 @@ def configured(s: Settings) -> dict[str, bool]:
         "math": True,
         "recall": bool(s.llm_url and s.llm_key),  # the curator writes the questions
         "todo": bool(s.lists.url and s.lists_token and s.llm_url and s.llm_key),
+        "infosec": bool(s.phrack or s.infosec_feeds),
     }

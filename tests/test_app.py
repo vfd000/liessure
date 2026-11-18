@@ -44,6 +44,14 @@ def wiki_page(title, n=0):
             "thumbnail": {"source": f"https://upload.wikimedia.org/{n}.jpg"}}
 
 
+PHRACK_HTML = """<html><head><link rel="canonical" href="https://phrack.org/issues/73/introduction_md.html"></head><body>
+<a href="/issues/73/introduction_md.html#article">Introduction</a>
+<a href="/issues/72/old-thing.html#article">An old one</a>
+<a href="/issues/73/escaping-from-a-docker-container-through-vdso_md.html#article">Escaping from a Docker container through vDSO</a>
+<a href="/issues/73/beyond-the-facade-exposing-smart-giants.html#article">Beyond the Facade :: Exposing Smart Giants</a>
+</body></html>"""
+
+
 def fake_backend(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
     host, path, q = request.url.host, request.url.path, request.url.params
@@ -93,6 +101,8 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
                       "sensor.envoy_1_lifetime_energy_consumption": ["19.980", "19.999", "20.000"]}[eid]
             times = ["2026-11-15T23:59:00-08:00", "2026-11-16T23:59:00-08:00", "2026-11-17T08:00:00-08:00"]
             return httpx.Response(200, json=[[{"state": v, "last_changed": t} for v, t in zip(series, times)]])
+    if host == "phrack.org" and path == "/index_latest.html":
+        return httpx.Response(200, text=PHRACK_HTML)
     if host == "jobs.test" and path.startswith("/api/"):
         assert request.headers["authorization"] == "Bearer jt"
         job = lambda n, **kw: {"id": n, "title": f"Security Engineer {n}", "company": f"Co{n}", "location": "Seattle",
@@ -195,6 +205,7 @@ def full_settings(**kw) -> Settings:
         travel=Service("http://travel.test"), travel_token="tt",
         wiki_interests=["linguistics"],
         homelab_feeds=["http://news.test/rss"], homelab_topics=["homelab tour"],
+        infosec_feeds=["http://news.test/atom"],
         jobs=Service("http://jobs.test", "https://jobs.example"), jobs_token="jt",
         grafana=Service("http://grafana.test", "https://telemetry.example"), grafana_token="gt",
         ha=Service("http://ha.test", "https://ha.example"), ha_token="ht",
@@ -207,7 +218,8 @@ def full_settings(**kw) -> Settings:
 def clear_caches():
     for c in (sources._news_cache, sources._nebula_cache, sources._inv_cache, sources._romm_total,
               sources._homelab_cache, sources._jobs_cache, sources._gaps_cache,
-              sources._telemetry_cache, sources._home_cache, sources._stats_cache, sources._todo_cache):
+              sources._telemetry_cache, sources._home_cache, sources._stats_cache, sources._todo_cache,
+              sources._infosec_cache, sources._phrack_cache):
         c._data.clear()
 
 
@@ -364,7 +376,7 @@ def test_unconfigured_sources_are_skipped():
         s = c.get("/api/sources").json()["sources"]
         assert s["wikipedia"]["configured"] and not s["movie"]["configured"]
         cards = c.get("/api/feed?n=6").json()["cards"]
-        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language", "homelab", "math"}
+        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language", "homelab", "math", "infosec"}
 
 
 def test_weights_and_pick():
@@ -1182,4 +1194,13 @@ def test_old_database_is_migrated_to_the_owner(tmp_path):
     assert st._db.execute("SELECT user FROM events").fetchone()[0] == "owner"
     assert st.math_stats()["all"]["tried"] == 1
     Store(path)  # opening it again is a no-op
+
+
+def test_infosec_cards_are_phrack_articles_and_feeds(client):
+    cards = [client.get("/api/card/infosec").json() for _ in range(30)]
+    phrack = [c for c in cards if c["label"] == "Infosec · Phrack #73"]
+    assert {c["title"] for c in phrack} == {"Escaping from a Docker container through vDSO",
+                                           "Beyond the Facade :: Exposing Smart Giants"}
+    assert all(c["url"].startswith("https://phrack.org/issues/73/") and "#" not in c["url"] for c in phrack)
+    assert any(c["label"] == "Infosec · Atom Daily" for c in cards)
 
