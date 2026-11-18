@@ -28,7 +28,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Awaitable, Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -530,7 +530,7 @@ one and mention the other in the note. Answer with JSON only."""
 
 
 def phrase_url(native: str) -> str:
-    return f"https://en.wiktionary.org/w/index.php?search={quote(native)}"
+    return f"https://en.wiktionary.org/w/index.php?search={quote(native.strip().rstrip('?!.。？！'))}"
 
 
 async def generate_phrases(client: httpx.AsyncClient, s: Settings, store: Store, rng: random.Random,
@@ -573,7 +573,7 @@ async def generate_phrases(client: httpx.AsyncClient, s: Settings, store: Store,
             blurb=" ".join(x for x in (str(c.get("meaning", ""))[:200], str(c.get("note", ""))[:240]) if x)
                   + " (Written by the LLM: Open checks it on Wiktionary.)",
             url=phrase_url(native),
-            actions=forvo_actions(native, code),
+            actions=phrase_actions(native, code),
             ref=c["id"],
         ).to_dict()
         picks.append({"ref": c["id"], "card": card, "reason": "", "score": 7, "source": "phrase"})
@@ -581,19 +581,34 @@ async def generate_phrases(client: httpx.AsyncClient, s: Settings, store: Store,
     return len(picks)
 
 
-_WORD_SPLIT = re.compile(r"[\s,.;:!?¡¿\"'()\[\]，、。！？；：「」『』«»—–-]+")
+# Wikipedia language codes -> (text-to-speech locale, Google Translate code). Forvo only has single
+# words, and Chinese has no spaces to split on, so phrases are spoken on the phone instead, with
+# Google Translate (which reads any phrase aloud) as the link.
+SPEECH = {
+    "te": ("te-IN", "te"), "zh": ("zh-CN", "zh-CN"), "zh-yue": ("zh-HK", "yue"), "yue": ("zh-HK", "yue"),
+    "hi": ("hi-IN", "hi"), "ja": ("ja-JP", "ja"), "ko": ("ko-KR", "ko"), "fr": ("fr-FR", "fr"),
+    "ru": ("ru-RU", "ru"), "uk": ("uk-UA", "uk"), "id": ("id-ID", "id"), "tl": ("fil-PH", "tl"),
+    "es": ("es-ES", "es"),
+}
 
 
-def forvo_actions(native: str, code: str) -> list[dict[str, str]]:
-    """Forvo has words, not sentences: a search for "एक, दो, तीन" finds nothing.
-    One button per word (at most four), each to that word's page."""
-    words = list(dict.fromkeys(w for w in _WORD_SPLIT.split(native) if w))
-    lang = code.split("-")[-1] if code else ""
-    anchor = f"#{lang}" if lang else ""
-    if len(words) <= 1:
-        word = words[0] if words else native
-        return [{"label": "Hear it on Forvo", "url": f"https://forvo.com/word/{quote(word)}/{anchor}"}]
-    return [{"label": f"Hear {w}", "url": f"https://forvo.com/word/{quote(w)}/{anchor}"} for w in words[:4]]
+def phrase_actions(native: str, code: str) -> list[dict[str, Any]]:
+    """"Hear it" speaks the phrase on the device (Android's text-to-speech, or the browser's);
+    Google Translate reads any phrase aloud too, so it's the link and the fallback."""
+    tag, gt = SPEECH.get(code, (code, code.split("-")[-1] if code else "auto"))
+    translate = "https://translate.google.com/?" + urlencode({"sl": gt or "auto", "tl": "en", "text": native,
+                                                              "op": "translate"})
+    return [{"label": "Hear it", "speak": {"text": native, "lang": tag, "fallback": translate}},
+            {"label": "Google Translate", "url": translate}]
+
+
+def code_for_label(s: Settings, label: str) -> str:
+    """'Cantonese · where is the bathroom?' -> 'zh-yue', from the configured languages."""
+    name = label.split("·")[0].strip().casefold()
+    for lang, code in s.languages_learning + s.languages_curious + s.languages_fluent:
+        if lang.casefold() == name:
+            return code
+    return ""
 
 
 # --------------------------------------------------------------------- todo
