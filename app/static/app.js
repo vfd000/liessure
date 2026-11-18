@@ -4,7 +4,7 @@
 const LABELS = {
   wikipedia: "Wikipedia", news: "News", game: "Games", video: "Videos", movie: "Movies",
   show: "Series", song: "Music", photo: "Photos", language: "Telugu", homelab: "Home lab",
-  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers", kquiz: "K-drama", trivia: "Jeopardy!", exercise: "Exercise", session: "Claude sessions",
+  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers", kquiz: "K-drama", trivia: "Jeopardy!", exercise: "Exercise", recommend: "Recommendations", session: "Claude sessions",
 };
 const android = window.LiessureAndroid || null; // injected by the Android app
 // The page's own words in the reader's language (/api/me's lang); cards carry their own.
@@ -39,6 +39,8 @@ const UI = {
     "No lyrics found for this song.": "No se encontró la letra.", "Couldn't get the lyrics right now.": "No se pudo cargar la letra.",
     "Done": "Hecho", "Not now": "Ahora no", "Nice.": "¡Bien!", "exercise": "ejercicio", "exercises": "ejercicios",
     "today": "hoy", "Okay, no exercise for a couple of hours.": "Vale, nada de ejercicio por un par de horas.",
+    "Get it": "Conseguir", "Requesting…": "Pidiendo…", "Requested": "Pedido", "Already requested": "Ya pedido",
+    "Couldn't request it": "No se pudo pedir",
     "Map": "Mapa", "Hide map": "Ocultar mapa", "Open in Maps": "Abrir en Mapas",
     "approximate route (straight lines between places)": "ruta aproximada (líneas rectas entre lugares)",
     "Search cards you've seen": "Buscar tarjetas que ya viste", "Later": "Después", "Done": "Hecho",
@@ -154,6 +156,23 @@ function renderCard(c) {
   if (c.quiz && (c.quiz.choices || c.quiz.answer !== undefined)) body.append(renderQuiz(c));
   if (c.flash) body.append(renderFlash(c, card));
   if (c.exercise && c.exercise.id) body.append(renderExercise(c, card));
+  if (c.request && c.request.tmdb) {
+    // Get it: a Jellyseerr request; Radarr or Sonarr fetch it into the library.
+    const get = el("button", "primary", "⬇ " + t("Get it"));
+    get.onclick = async () => {
+      get.disabled = true;
+      get.textContent = t("Requesting…");
+      try {
+        const r = await fetch("/api/recommend/get", { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify(c.request) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.detail || r.status);
+        get.textContent = j.status === "already requested" ? "✓ " + t("Already requested") : "✓ " + t("Requested");
+        report(c, "play");
+      } catch (e) { get.textContent = "⬇ " + t("Get it"); get.disabled = false; alert(t("Couldn't request it") + ": " + e.message); }
+    };
+    actions.prepend(get);
+  }
 
   const actions = el("div", "actions");
   if (c.more && c.more.url) {

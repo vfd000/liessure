@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 import dataclasses
 
-from . import auth, avoid, curator, exercise, flashcards, lessons, lyrics, profile, reader, sources
+from . import auth, avoid, curator, exercise, flashcards, lessons, lyrics, profile, reader, recommend, sources
 from .config import LESSON_LABELS
 from .config import KINDS, MAX_PER_LOAD, OWNER_ONLY_KINDS, RECALL_KINDS, Settings
 from .store import Store
@@ -112,6 +112,12 @@ class FromCard(BaseModel):
 class CardToTodo(BaseModel):
     card: dict = Field(...)
     why: str = Field(pattern="^(study|implement)$")
+
+
+class GetIt(BaseModel):
+    media: str = Field(pattern="^(movie|tv)$")
+    tmdb: int = Field(gt=0)
+    title: str = Field("", max_length=300)
 
 
 class ExerciseDone(BaseModel):
@@ -403,6 +409,12 @@ def create_app(
             return await todo_card(client, rng)
         if kind == "exercise":
             return await exercise_card(client, rng, user)
+        if kind == "recommend":
+            try:
+                return (await recommend.card(client, settings, rng, store.shown_refs(user, "recommend"))).to_dict()
+            except (sources.Unavailable, httpx.HTTPError, ValueError, KeyError) as e:
+                log.info("recommend: %s: %s", type(e).__name__, e)
+                return None
         # Mostly the curated pool; a share of uncurated cards keeps some surprise in it.
         # The curated pool is picked for the owner's profile; others get fresh cards until per-user curation.
         if user == auth.OWNER and settings.curator_enabled and rng.random() < settings.curator_share:
@@ -480,6 +492,20 @@ def create_app(
         except sources.Unavailable:
             return None
         return exercise.card_for(pick, now, ran).to_dict()
+
+    @app.post("/api/recommend/get")
+    async def get_it(request: Request, body: GetIt):
+        """Get it: a Jellyseerr request for this movie or series (the owner's; it downloads to the shared library)."""
+        if request.state.user != auth.OWNER:
+            raise HTTPException(403, "requests are the owner's")
+        if not (settings.jellyseerr_url and settings.jellyseerr_api_key):
+            raise HTTPException(409, "Jellyseerr isn't configured")
+        try:
+            out = await recommend.request(request.app.state.client, settings, body.media, body.tmdb)
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"Jellyseerr didn't take it: {type(e).__name__}")
+        store.record("recommend", f"rec:{body.media}:{body.tmdb}", "get", body.title, user=request.state.user)
+        return out
 
     @app.post("/api/exercise/done")
     async def exercise_done(request: Request, body: ExerciseDone):

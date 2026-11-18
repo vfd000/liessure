@@ -51,12 +51,13 @@ DEFAULT_WEIGHTS = {
     "trivia": 2,
     "session": 3,
     "exercise": 2,
+    "recommend": 2,
     "flashcard": 3,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "session": 2, "exercise": 1, "flashcard": 2}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "session": 2, "exercise": 1, "recommend": 1, "flashcard": 2}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
 RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite"})
@@ -101,7 +102,7 @@ def parse_user_prefs(raw: str, path: str = "") -> dict[str, dict]:
 
 
 # Kinds only the owner sees: they read the owner's own services (jobs, lists, the lab).
-OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry", "session", "exercise"})
+OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry", "session", "exercise", "recommend"})
 
 # Kinds whose titles never go to the LLM as evidence of what you like.
 UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia", "session", "exercise"})
@@ -351,6 +352,11 @@ class Settings:
     activity_url: str = ""
     activity_token: str = ""
 
+    # Recommendations with a Get it button: Jellyseerr (requests go on to Radarr/Sonarr). LINK is its public URL.
+    jellyseerr_url: str = ""
+    jellyseerr_api_key: str = ""
+    jellyseerr_link: str = ""
+
     # What a kWh is worth: PSE's effective rate, what solar saves (or earns back) per kWh.
     home_energy_rate: float = 0.22
 
@@ -447,6 +453,9 @@ class Settings:
             exercise_list_id=int(_env("EXERCISE_LIST_ID", "15")),
             activity_url=_strip(_env("ACTIVITY_URL")),
             activity_token=_env("ACTIVITY_TOKEN"),
+            jellyseerr_url=_strip(_env("JELLYSEERR_URL")),
+            jellyseerr_api_key=_env("JELLYSEERR_API_KEY"),
+            jellyseerr_link=_strip(_env("JELLYSEERR_LINK", "https://requests.liess.tv")),
         )
 
 
