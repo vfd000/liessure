@@ -153,3 +153,22 @@ body {
 .offline { color: var(--muted); font-size: 14px; padding: 12px 4px; border-top: 1px solid currentColor; margin-top: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+/* Full-screen photo. object-fit keeps the whole frame visible rather than
+   cropping it, and the backdrop is opaque so nothing shows through. */
+dialog.lightbox {
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  max-height: 100vh;
+  padding: 0;
+  border: 0;
+  background: #000;
+}
+dialog.lightbox::backdrop { background: #000; }
+dialog.lightbox img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}

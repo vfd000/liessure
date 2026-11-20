@@ -83,6 +83,19 @@ function saveCards(cards) {
 const params = new URLSearchParams(location.search);
 if (params.get("from") === "reddit") document.getElementById("banner").hidden = false;
 
+// Full-screen image, closed by a tap, the back button, or Escape.
+function lightbox(src, alt) {
+  const d = el("dialog", "lightbox");
+  const img = el("img");
+  img.src = src;
+  img.alt = alt || "";
+  d.append(img);
+  d.addEventListener("click", () => d.close());
+  d.addEventListener("close", () => d.remove());
+  document.body.append(d);
+  d.showModal();
+}
+
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -376,7 +389,15 @@ function renderCard(c) {
   body.append(actions);
   card.append(body);
 
-  if (c.image) card.querySelector(".media").onclick = () => { report(c, "open"); openUrl(c.url, c.open_in_app); };
+  if (c.image) card.querySelector(".media").onclick = () => {
+    report(c, "open");
+    // A photo of yours opens where you are, full screen. The card already holds
+    // Immich's `preview` render (1920px on the long edge, the same one Immich's
+    // own viewer shows), so this costs nothing more to load. "Open" still goes
+    // to Immich for everything the web UI can do.
+    if (c.photo && c.photo.id) lightbox(c.image, c.title);
+    else openUrl(c.url, c.open_in_app);
+  };
   return card;
 }
 
