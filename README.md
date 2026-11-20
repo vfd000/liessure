@@ -30,7 +30,7 @@ feed, so a fresh deploy shows Wikipedia and language cards only.
 | `video` | Invidious search over a topic list (no Shorts, nothing under 3 min), plus Nebula's RSS feeds | `INVIDIOUS_URL`, `INVIDIOUS_TOPICS`, `NEBULA_FEEDS`, `VIDEO_LINK` |
 | `movie`, `show` | Jellyfin random item, unwatched first if a user id is set; trailer plays inline | `JELLYFIN_URL`, `JELLYFIN_TOKEN`, `JELLYFIN_USER_ID` |
 | `song` | Jellyfin random track, plays inline; "Open Symfonium" on Android | same, plus `MUSIC_APP_PACKAGE` / `MUSIC_APP_NAME` |
-| `photo` | Immich `search/random`, or a today's memory about a third of the time | `IMMICH_URL`, `IMMICH_API_KEY` (read scopes only) |
+| `photo` | Immich `search/random`, or a today's memory about a third of the time. **What is this?** sends the thumbnail and the photo's date and place to the vision model, which says what it sees and how sure it is, and links Wikipedia for the subject it names (plus iNaturalist when that subject is a living thing) | `IMMICH_URL`, `IMMICH_API_KEY` (read scopes only; `asset.view` is what fetches the thumbnail) |
 | `news` | RSS/Atom: Seattle Times, NPR, BBC World, Guardian Science, Ars Technica, HN best by default; last 72 h | `NEWS_FEEDS` (`a|b|c`), `NEWS_MAX_AGE_HOURS` |
 | `language` | For a language you're learning (the first twice as often): practice drill, its Wikipedia, learner videos, Lingopie, dictionaries and pronunciation | `LANGUAGES_LEARNING`, `LANGUAGE_PRACTICE_URL`, `LINGOPIE_URL` |
 | `homelab` | The tech in your lab (Wikipedia, from a list), home-lab build and design write-ups (ServeTheHome, selfh.st, Jeff Geerling, noted.lol, Lawrence Systems, Home Assistant blog; last 30 days) and videos | `HOMELAB_STACK`, `HOMELAB_FEEDS`, `HOMELAB_TOPICS`, `HOMELAB_MAX_AGE_DAYS` |

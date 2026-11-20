@@ -198,7 +198,7 @@ function renderCard(c) {
     actions.append(btn);
     body.append(box);
   }
-  if ((c.details && c.details.length) || (c.photo && c.photo.id)) {
+  if (c.details && c.details.length) {
     const more = el("div", "details");
     more.hidden = true;
     if (c.details && c.details.length) {
@@ -217,32 +217,42 @@ function renderCard(c) {
       }
       more.append(links);
     }
-    if (c.photo && c.photo.id) {
-      const found = el("p", "why");
-      const ident = el("button", "", "Identify");
-      ident.onclick = async () => {
-        ident.disabled = true;
-        found.textContent = "Looking at it…";
-        try {
-          const r = await fetch(`/api/photo/${c.photo.id}/identify`, { method: "POST" });
-          if (!r.ok) throw new Error(r.status);
-          found.textContent = (await r.json()).text;
-        } catch {
-          found.textContent = "Couldn't identify it right now.";
-          ident.disabled = false;
-        }
-      };
-      const claude = el("button", "", "Ask Claude");
-      claude.onclick = () => askClaude(c);
-      const row = el("div", "actions");
-      row.append(ident, claude);
-      more.append(row, found);
-    }
     const label = c.details_label || t("Details");
     const toggle = el("button", "", label);
     toggle.onclick = () => { more.hidden = !more.hidden; toggle.textContent = more.hidden ? label : t("Hide details"); };
     actions.append(toggle);
     body.append(more);
+  }
+  // What is this? The vision model on the photo, plus somewhere to read more.
+  // On the card rather than behind "Details": for a photo it is the whole point.
+  if (c.photo && c.photo.id) {
+    const found = el("p", "why");
+    const links = el("div", "actions");
+    const ident = el("button", "", t("What is this?"));
+    ident.onclick = async () => {
+      ident.disabled = true;
+      found.textContent = t("Looking at it…");
+      try {
+        const r = await fetch(`/api/photo/${c.photo.id}/identify`, { method: "POST" });
+        if (!r.ok) throw new Error(r.status);
+        const j = await r.json();
+        found.textContent = j.text;
+        links.replaceChildren();
+        for (const l of j.links || []) {
+          const a = el("a", "", l.label);
+          a.href = l.url;
+          a.onclick = (e) => { e.preventDefault(); openUrl(l.url); };
+          links.append(a);
+        }
+      } catch {
+        found.textContent = t("Couldn't identify it right now.");
+        ident.disabled = false;
+      }
+    };
+    const claude = el("button", "", "Ask Claude");
+    claude.onclick = () => askClaude(c);
+    actions.append(ident, claude);
+    body.append(found, links);
   }
   if (c.embed && c.embed.src) {
     const play = el("button", "primary", "▶ " + (c.embed.label || t("Play here")));
