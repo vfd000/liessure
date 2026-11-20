@@ -1131,6 +1131,49 @@ def test_photo_details_and_identify(monkeypatch):
         assert c.post("/api/photo/abcdef12/identify").status_code == 409
 
 
+def test_photo_identify_links(monkeypatch):
+    """A named subject gets somewhere to read more; a plain reply still identifies."""
+    asset = {"id": "abcdef12", "localDateTime": "2024-05-01T10:00:00", "exifInfo": {
+        "city": "Port Angeles", "country": "United States", "latitude": 48.1, "longitude": -123.4}}
+
+    def backend(request):
+        if request.url.host == "im.test" and request.url.path == "/api/assets/abcdef12":
+            return httpx.Response(200, json=asset)
+        if request.url.host == "im.test" and request.url.path.endswith("/thumbnail"):
+            return httpx.Response(200, content=b"\xff\xd8x", headers={"content-type": "image/jpeg"})
+        return fake_backend(request)
+
+    async def ask(client, s, content, system=None):
+        return '{"text": "An orange rock lichen.", "subject": "Xanthoria elegans", "organism": true}'
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    curator._identified.clear()
+    with make_client(full_settings(llm_url="http://llm.test", llm_key="k"), handler=backend) as c:
+        j = c.post("/api/photo/abcdef12/identify").json()
+    assert j["text"] == "An orange rock lichen." and j["subject"] == "Xanthoria elegans"
+    by_label = {l["label"].split(":")[0]: l for l in j["links"]}
+    assert "Wikipedia" in by_label and by_label["Wikipedia"]["url"].startswith("https://en.wikipedia.org/wiki/")
+    assert " " not in by_label["Wikipedia"]["url"]  # the title is escaped, not pasted raw
+    assert by_label["iNaturalist"]["url"] == "https://www.inaturalist.org/search?q=Xanthoria%20elegans"
+
+    # Not a living thing: Wikipedia only.
+    async def place(client, s, content, system=None):
+        return '{"text": "A harbour.", "subject": "Port Angeles", "organism": false}'
+    monkeypatch.setattr(curator, "ask_llm", place)
+    curator._identified.clear()
+    with make_client(full_settings(llm_url="http://llm.test", llm_key="k"), handler=backend) as c:
+        j = c.post("/api/photo/abcdef12/identify").json()
+    assert [l["label"].split(":")[0] for l in j["links"]] == ["Wikipedia"]
+
+    # A model that ignores the JSON instruction still identifies the photo.
+    async def plain(client, s, content, system=None):
+        return "Just prose, no JSON."
+    monkeypatch.setattr(curator, "ask_llm", plain)
+    curator._identified.clear()
+    with make_client(full_settings(llm_url="http://llm.test", llm_key="k"), handler=backend) as c:
+        j = c.post("/api/photo/abcdef12/identify").json()
+    assert j["text"] == "Just prose, no JSON." and j["links"] == [] and j["subject"] == ""
+
+
 def test_page_code_always_revalidates(client):
     for path in ("/app.js", "/style.css", "/sw.js"):
         r = client.get(path)

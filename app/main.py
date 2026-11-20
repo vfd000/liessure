@@ -644,10 +644,11 @@ def create_app(
         if not (settings.curator_enabled and settings.immich.url and settings.immich_api_key):
             raise HTTPException(409, "needs the LLM and Immich")
         try:
-            text = await curator.identify_photo(request.app.state.client, settings_for(request.state.user), asset_id)
+            found = await curator.identify_photo(request.app.state.client, settings_for(request.state.user), asset_id)
         except httpx.HTTPError as e:
             raise HTTPException(502, f"couldn't look at it: {type(e).__name__}")
-        return {"text": text[:2000]}
+        return {"text": found["text"][:2000], "subject": found["subject"],
+                "links": found["links"][:4]}
 
     @app.post("/api/math/help")
     async def math_help(request: Request, h: MathHelp):
