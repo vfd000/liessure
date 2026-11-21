@@ -118,6 +118,25 @@ function openUrl(url, inApp) {
   else window.open(url, "_blank", "noopener");
 }
 
+// An image source that is briefly down (Immich or Jellyfin restarting, /img
+// answering 502) used to leave the card as bare text for good. Try again a
+// couple of times before giving up; the "try" parameter only defeats the
+// browser's memory of the failure, the server ignores it.
+const IMAGE_RETRY_MS = [2000, 6000];
+
+function retryImage(img, src) {
+  let attempt = 0;
+  img.onerror = () => {
+    if (attempt >= IMAGE_RETRY_MS.length) { img.remove(); return; }
+    const wait = IMAGE_RETRY_MS[attempt++];
+    setTimeout(() => {
+      if (!img.isConnected) return; // the card left the page meanwhile
+      img.src = src + (src.includes("?") ? "&" : "?") + "try=" + attempt;
+    }, wait);
+  };
+  img.src = src;
+}
+
 function renderCard(c) {
   const card = el("article", "card " + c.kind);
   card.card = c; // podcast mode finds the readable cards on the page
@@ -126,8 +145,7 @@ function renderCard(c) {
     const img = el("img", "media");
     img.loading = "lazy";
     img.alt = "";
-    img.src = c.image;
-    img.onerror = () => img.remove();
+    retryImage(img, c.image);
     card.append(img);
   }
   if (c.again) card.classList.add("again");
