@@ -83,6 +83,19 @@ function saveCards(cards) {
 const params = new URLSearchParams(location.search);
 if (params.get("from") === "reddit") document.getElementById("banner").hidden = false;
 
+// Full-screen image, closed by a tap, the back button, or Escape.
+function lightbox(src, alt) {
+  const d = el("dialog", "lightbox");
+  const img = el("img");
+  img.src = src;
+  img.alt = alt || "";
+  d.append(img);
+  d.addEventListener("click", () => d.close());
+  d.addEventListener("close", () => d.remove());
+  document.body.append(d);
+  d.showModal();
+}
+
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -216,7 +229,7 @@ function renderCard(c) {
     actions.append(btn);
     body.append(box);
   }
-  if ((c.details && c.details.length) || (c.photo && c.photo.id)) {
+  if (c.details && c.details.length) {
     const more = el("div", "details");
     more.hidden = true;
     if (c.details && c.details.length) {
@@ -235,32 +248,42 @@ function renderCard(c) {
       }
       more.append(links);
     }
-    if (c.photo && c.photo.id) {
-      const found = el("p", "why");
-      const ident = el("button", "", "Identify");
-      ident.onclick = async () => {
-        ident.disabled = true;
-        found.textContent = "Looking at it…";
-        try {
-          const r = await fetch(`/api/photo/${c.photo.id}/identify`, { method: "POST" });
-          if (!r.ok) throw new Error(r.status);
-          found.textContent = (await r.json()).text;
-        } catch {
-          found.textContent = "Couldn't identify it right now.";
-          ident.disabled = false;
-        }
-      };
-      const claude = el("button", "", "Ask Claude");
-      claude.onclick = () => askClaude(c);
-      const row = el("div", "actions");
-      row.append(ident, claude);
-      more.append(row, found);
-    }
     const label = c.details_label || t("Details");
     const toggle = el("button", "", label);
     toggle.onclick = () => { more.hidden = !more.hidden; toggle.textContent = more.hidden ? label : t("Hide details"); };
     actions.append(toggle);
     body.append(more);
+  }
+  // What is this? The vision model on the photo, plus somewhere to read more.
+  // On the card rather than behind "Details": for a photo it is the whole point.
+  if (c.photo && c.photo.id) {
+    const found = el("p", "why");
+    const links = el("div", "actions");
+    const ident = el("button", "", t("What is this?"));
+    ident.onclick = async () => {
+      ident.disabled = true;
+      found.textContent = t("Looking at it…");
+      try {
+        const r = await fetch(`/api/photo/${c.photo.id}/identify`, { method: "POST" });
+        if (!r.ok) throw new Error(r.status);
+        const j = await r.json();
+        found.textContent = j.text;
+        links.replaceChildren();
+        for (const l of j.links || []) {
+          const a = el("a", "", l.label);
+          a.href = l.url;
+          a.onclick = (e) => { e.preventDefault(); openUrl(l.url); };
+          links.append(a);
+        }
+      } catch {
+        found.textContent = t("Couldn't identify it right now.");
+        ident.disabled = false;
+      }
+    };
+    const claude = el("button", "", "Ask Claude");
+    claude.onclick = () => askClaude(c);
+    actions.append(ident, claude);
+    body.append(found, links);
   }
   if (c.embed && c.embed.src) {
     const play = el("button", "primary", "▶ " + (c.embed.label || t("Play here")));
@@ -384,7 +407,15 @@ function renderCard(c) {
   body.append(actions);
   card.append(body);
 
-  if (c.image) card.querySelector(".media").onclick = () => { report(c, "open"); openUrl(c.url, c.open_in_app); };
+  if (c.image) card.querySelector(".media").onclick = () => {
+    report(c, "open");
+    // A photo of yours opens where you are, full screen. The card already holds
+    // Immich's `preview` render (1920px on the long edge, the same one Immich's
+    // own viewer shows), so this costs nothing more to load. "Open" still goes
+    // to Immich for everything the web UI can do.
+    if (c.photo && c.photo.id) lightbox(c.image, c.title);
+    else openUrl(c.url, c.open_in_app);
+  };
   return card;
 }
 

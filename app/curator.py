@@ -627,13 +627,65 @@ def code_for_label(s: Settings, label: str) -> str:
 
 IDENTIFY_SYSTEM = """You look at one photo for the person who took it and say what's in it: landmarks \
 and buildings, plants, animals, food, signs, vehicles, the kind of place. Use the date and location \
-given as hints, and say how sure you are about each identification. Plain text, under 120 words."""
+given as hints, and say how sure you are about each identification. Under 140 words.
 
-_identified: dict[str, str] = {}
+Reply with JSON only, no code fence:
+{"text": "what you see, in plain prose", "subject": "the one best name for the main subject, as you \
+would look it up in an encyclopedia (a species, a landmark, a dish), or \"\" if you are not sure \
+enough to name it", "organism": true if that subject is a living thing - plant, animal, fungus, \
+lichen - and false otherwise}"""
+
+_identified: dict[str, dict[str, Any]] = {}
 
 
-async def identify_photo(client: httpx.AsyncClient, s: Settings, asset_id: str, ask=None) -> str:
-    """What's in an Immich photo, from the vision model; cached per photo for the life of the process."""
+def parse_identified(raw: str) -> tuple[str, str, bool]:
+    """(prose, subject, organism) from the model's reply.
+
+    Tolerates a plain-text reply - an older model, or one that ignores the JSON
+    instruction - by treating the whole thing as the prose, with no subject and
+    so no links. Identification must keep working even when linking cannot.
+    """
+    data = _json_object(raw)
+    if not isinstance(data, dict):
+        return raw, "", False
+    text = str(data.get("text") or "").strip()
+    if not text:
+        return raw, "", False
+    return text, str(data.get("subject") or "").strip()[:120], bool(data.get("organism"))
+
+
+async def identify_links(client: httpx.AsyncClient, s: Settings, subject: str,
+                         organism: bool) -> list[dict[str, str]]:
+    """Somewhere to read more about what the photo turned out to be.
+
+    Wikipedia for anything, resolved through search so the link is a real
+    article rather than a guessed title; iNaturalist as well for a living
+    thing, where it is usually the better page.
+    """
+    if not subject:
+        return []
+    links: list[dict[str, str]] = []
+    lang = s.wikipedia_lang or "en"
+    try:
+        titles = await wiki_search(client, lang, subject, limit=1)
+    except httpx.HTTPError as e:
+        log.warning("identify wikipedia lookup: %s", e)
+        titles = []
+    if titles:
+        links.append({"label": f"Wikipedia: {titles[0]}",
+                      "url": f"https://{lang}.wikipedia.org/wiki/{quote(titles[0].replace(' ', '_'))}"})
+    if organism:
+        links.append({"label": f"iNaturalist: {subject}",
+                      "url": f"https://www.inaturalist.org/search?q={quote(subject)}"})
+    return links
+
+
+async def identify_photo(client: httpx.AsyncClient, s: Settings, asset_id: str, ask=None) -> dict[str, Any]:
+    """What's in an Immich photo, from the vision model, with somewhere to read more.
+
+    Cached per photo for the life of the process. Returns
+    {"text": ..., "subject": ..., "links": [{"label", "url"}]}.
+    """
     key = f"{asset_id}:{s.reply_lang}"
     if key in _identified:
         return _identified[key]
@@ -645,9 +697,12 @@ async def identify_photo(client: httpx.AsyncClient, s: Settings, asset_id: str, 
     parts = [{"type": "text", "text": f"What's in this photo? {hints}"},
              {"type": "image_url", "image_url": {"url": image}}]
     system = IDENTIFY_SYSTEM + (f" Write it in {s.reply_lang}." if s.reply_lang else "")
-    text = (await (ask or ask_llm)(client, s, parts, system=system)).strip()
-    _identified[key] = text
-    return text
+    raw = (await (ask or ask_llm)(client, s, parts, system=system)).strip()
+    text, subject, organism = parse_identified(raw)
+    found = {"text": text, "subject": subject,
+             "links": await identify_links(client, s, subject, organism)}
+    _identified[key] = found
+    return found
 
 
 # --------------------------------------------------------------- flashcards
