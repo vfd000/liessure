@@ -2075,3 +2075,81 @@ def test_recommendations_from_jellyseerr_and_get_it():
         assert c.post("/api/recommend/get", json=card["request"]).json() == {"status": "requested", "id": 77}
     assert requested == [{"mediaType": "tv", "mediaId": 2, "seasons": "all"}]
 
+
+
+def test_someone_else_never_gets_the_owners_cards(tmp_path):
+    """The Nov 2026 leak: Dani, signed in as herself but with no preferences on the server, got axl's
+    cards (photos from his Immich, his Jellyfin watch state, his interests): settings_for() handed
+    anyone without preferences the owner's settings. Every visitor signs in as themselves, and someone
+    other than the owner gets nothing made from the owner's accounts or profile."""
+    who = [AXL]
+    calls: list[httpx.Request] = []
+    inner = sso_backend(who)
+
+    def recording(request):
+        calls.append(request)
+        return inner(request)
+
+    db = tmp_path / "l.db"
+    old = Store(db)  # a card that reached her before the fix: removed when the app starts
+    old.remember_shown([{"kind": "photo", "ref": "asset-1", "title": "Memory", "url": f"{IM}/photos/asset-1"},
+                        {"kind": "wikipedia", "ref": "Seoul", "title": "Seoul", "url": "https://w/Seoul"}], DANI)
+    old.remember_shown([{"kind": "photo", "ref": "asset-1", "title": "Memory", "url": f"{IM}/photos/asset-1"}])
+    app = create_app(sso_settings(travel=Service("http://travel.test"), travel_token="tt"),
+                     transport=httpx.MockTransport(recording), store=Store(db), run_curator=False)
+    assert [c["kind"] for c in app.state.store.search_history("", DANI)] == ["wikipedia"]
+    assert [c["kind"] for c in app.state.store.search_history("", "owner")] == ["photo"]
+
+    with TestClient(app, base_url="https://testserver") as anon:
+        # No session, no cards: not the feed, not a card, not an image, not history.
+        for path in ("/api/feed", "/api/card/photo", "/api/me", "/api/history?q=", "/api/ideas",
+                     f"/img?src={IM}/api/assets/a/thumbnail?size=preview"):
+            assert anon.get(path).status_code == 401, path
+        assert anon.get("/", follow_redirects=False).headers["location"] == "/auth/login"
+
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        assert a.get("/api/card/photo").json()["kind"] == "photo"  # the owner still has his
+        a.post("/api/ideas", json={"text": "axl's idea"})
+        a.get("/api/feed?n=12")
+
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        calls.clear()
+        me = d.get("/api/me").json()
+        assert me["user"] == DANI and not me["owner"]
+        srcs = d.get("/api/sources").json()["sources"]
+        assert not srcs["photo"]["configured"]
+        assert d.get("/api/card/photo").status_code == 503
+        kinds = set()
+        for _ in range(8):
+            kinds |= {c["kind"] for c in d.get("/api/feed?n=20").json()["cards"]}
+        assert kinds and not kinds & {"photo", "job", "skill", "todo", "telemetry", "session", "exercise", "recommend"}
+        # Nothing on her behalf used the owner's accounts or interests.
+        for r in calls:
+            assert r.headers.get("x-api-key") != "imk", r.url  # his Immich key
+            assert "u1" not in (r.url.params.get("userId"), r.url.params.get("UserId")), r.url  # his Jellyfin user
+            assert r.url.host not in ("im.test", "travel.test", "photos.example"), r.url
+            assert r.url.params.get("srsearch") != "linguistics", r.url  # his interests
+            assert r.url.params.get("q") not in ("docs", "homelab tour"), r.url  # his video topics
+        # His photos aren't reachable by URL either.
+        assert d.get("/img", params={"src": f"{IM}/api/assets/a/thumbnail?size=preview"}).status_code == 400
+        assert d.post("/api/photo/0123abcd-0000/identify").status_code == 403
+        # Her history and ideas are her own.
+        assert all(c["kind"] != "photo" for c in d.get("/api/history?q=").json()["cards"])
+        assert d.get("/api/ideas").json()["ideas"] == []
+        assert d.post("/api/ideas/1/status", json={"status": "done"}).status_code == 403
+        assert d.post("/api/curate").status_code == 403
+
+
+def test_without_sign_in_configured_the_server_refuses_to_start(monkeypatch):
+    """Sign-in off made everyone the owner. From the environment it's required unless LIESSURE_AUTH=off."""
+    for k in ("ZITADEL_CLIENT_ID", "ZITADEL_CLIENT_SECRET", "ZITADEL_USER_SUBS", "LIESSURE_AUTH"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("ZITADEL_CLIENT_ID", "cid")  # a half-configured .env must not fail open either
+    s = Settings.from_env()
+    assert s.require_sign_in and not s.sso_enabled
+    with pytest.raises(RuntimeError, match="sign-in isn't configured"):
+        create_app(s, store=Store(":memory:"), run_curator=False)
+    monkeypatch.setenv("LIESSURE_AUTH", "off")
+    assert not Settings.from_env().require_sign_in

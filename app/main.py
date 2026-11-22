@@ -194,7 +194,14 @@ def create_app(
     run_curator: bool = True,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
+    if settings.require_sign_in and not settings.sso_enabled:
+        # Without sign-in everyone is the owner. Fail closed rather than serve his cards to anyone.
+        raise RuntimeError("sign-in isn't configured: set ZITADEL_CLIENT_ID, ZITADEL_CLIENT_SECRET and "
+                           "ZITADEL_USER_SUBS (or LIESSURE_AUTH=off for a local run)")
     store = store or Store(f"{settings.data_dir}/liessure.db")
+    # Cards from the owner's own services that reached someone else before they were owner-only.
+    if purged := store.purge_kinds_not_owned(OWNER_ONLY_KINDS):
+        log.warning("removed %d owner-only cards from other people's history", purged)
     profiles = profile.ProfileCache(settings)
 
     @asynccontextmanager
@@ -315,11 +322,27 @@ def create_app(
     def prefs_for(user: str) -> dict:
         return settings.user_prefs.get(settings.owner_sub if user == auth.OWNER else user, {}) or {}
 
+    # What someone other than the owner starts from: the household's shared libraries (Jellyfin, RomM,
+    # Invidious, Home Assistant, the LLM) but nothing of the owner's own: not his accounts (his Immich
+    # photos, his Jellyfin watch history, his trips, his household-graph profile) and not his interests,
+    # languages, feeds or channels. Their own preferences (USER_PREFS) are layered on top of this.
+    reader_base = dataclasses.replace(
+        settings,
+        immich_api_key="", jellyfin_user_id="", travel_token="", graph_token="", graph_person="",
+        curator_profile="", curator_channels=[], language_channels=[],
+        wiki_interests=[], invidious_topics=[], nebula_feeds=[], news_feeds=[],
+        homelab_stack=[], homelab_feeds=[], homelab_topics=[], infosec_feeds=[], phrack=False,
+        languages_learning=[], languages_curious=[], languages_fluent=[],
+        language_practice_url="", lingopie_url="",
+    )
+
     def settings_for(user: str) -> Settings:
-        """The settings a person's cards are made with: their reading language, news, interests and lessons."""
+        """The settings a person's cards are made with: their reading language, news, interests and lessons.
+        The owner's are the server's own; anyone else's start from reader_base, never from the owner's."""
         p = prefs_for(user)
+        base = settings if user == auth.OWNER else reader_base
         if not p:
-            return settings
+            return base
         changes: dict = {}
         if p.get("wikipedia"):
             changes["wikipedia_lang"] = p["wikipedia"]
@@ -339,11 +362,7 @@ def create_app(
         if p.get("learning"):
             # Lessons are their way into a new language; a whole Wikipedia article in it is a wall of text.
             changes["language_wiki"] = False
-        if user != auth.OWNER:
-            # The owner's own practice links (drill app, Lingopie) aren't theirs.
-            changes["language_practice_url"] = ""
-            changes["lingopie_url"] = ""
-        return dataclasses.replace(settings, **changes)
+        return dataclasses.replace(base, **changes)
 
     def lesson_prefs(user: str, s: Settings) -> dict:
         """Their lesson preferences, or beginner lessons (explained in English) in the languages their
@@ -364,7 +383,12 @@ def create_app(
         """The owner sees everything; others don't see cards built from the owner's own services,
         nor kinds their preferences turn off. Lessons are for people with something to learn."""
         p = prefs_for(user)
-        kinds = set(KINDS) if user == auth.OWNER else set(KINDS) - OWNER_ONLY_KINDS
+        if user == auth.OWNER:
+            kinds = set(KINDS)
+        else:
+            # Only what their own settings can make: a source configured for the owner alone is off for them.
+            mine = sources.configured(settings_for(user))
+            kinds = {k for k in KINDS if mine.get(k, True)} - OWNER_ONLY_KINDS
         kinds -= set(p.get("kinds_off") or [])
         if not (p.get("learning") or (user == auth.OWNER and settings.languages_learning)):
             kinds.discard("lesson")
@@ -641,6 +665,8 @@ def create_app(
         """What's in a photo: the household vision model, with the photo's date and place as hints."""
         if not re.fullmatch(r"[0-9a-fA-F-]{8,64}", asset_id):
             raise HTTPException(400, "not an asset id")
+        if "photo" not in kinds_for(request.state.user):
+            raise HTTPException(403, "photos are the owner's")
         if not (settings.curator_enabled and settings.immich.url and settings.immich_api_key):
             raise HTTPException(409, "needs the LLM and Immich")
         try:
@@ -681,12 +707,16 @@ def create_app(
         return {"id": store.add_idea(i.text.strip(), i.about.strip(), user=request.state.user)}
 
     @app.get("/api/ideas")
-    async def list_ideas(status: str = ""):
-        ideas = store.ideas()
+    async def list_ideas(request: Request, status: str = ""):
+        """The owner builds from everyone's ideas; anyone else sees only their own."""
+        user = request.state.user
+        ideas = store.ideas(None if user == auth.OWNER else user)
         return {"ideas": [i for i in ideas if not status or i["status"] == status]}
 
     @app.post("/api/ideas/{idea_id}/status")
-    async def idea_status(idea_id: int, body: IdeaStatus):
+    async def idea_status(request: Request, idea_id: int, body: IdeaStatus):
+        if request.state.user != auth.OWNER:
+            raise HTTPException(403, "the owner triages ideas")
         if not store.set_idea_status(idea_id, body.status):
             raise HTTPException(404, "no such idea")
         return {"id": idea_id, "status": body.status}
@@ -694,6 +724,8 @@ def create_app(
     @app.post("/api/curate")
     async def curate_now(request: Request, kind: str = ""):
         """Run one curation pass now (also runs on its own schedule). ?kind= limits it to one kind."""
+        if request.state.user != auth.OWNER:
+            raise HTTPException(403, "the curated pool is the owner's")
         if not settings.curator_enabled:
             raise HTTPException(409, "curator needs LLM_URL and LLM_KEY")
         only = None
@@ -944,7 +976,8 @@ def create_app(
 
     @app.get("/img")
     async def img(request: Request, src: str):
-        headers = sources.auth_headers_for(settings, src)
+        # With the reader's own settings: someone else gets no Immich key, so not the owner's photos.
+        headers = sources.auth_headers_for(settings_for(request.state.user), src)
         if headers is None or ".." in src:
             raise HTTPException(400, "not an allowed image source")
         # Immich has no preview for some photos (a failed thumbnail job, odd formats): try the small thumbnail.

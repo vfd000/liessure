@@ -67,9 +67,16 @@ let offline = false;
 let shown = new Set(); // keys of cards on screen, so saved ones aren't repeated
 
 // The last cards the server sent, kept so there's something to read when the
-// network drops (see sw.js for the page and images).
-const SAVED_KEY = "liessure.lastCards";
+// network drops (see sw.js for the page and images). They're one person's:
+// SAVED_WHO says whose, and they're dropped on sign-out or when someone else
+// signs in on this browser. (v2: v1 copies may hold another person's cards.)
+const SAVED_KEY = "liessure.lastCards.v2";
+const SAVED_WHO = "liessure.lastCards.who";
 const SAVED_MAX = 60;
+function forgetSaved() {
+  try { localStorage.removeItem(SAVED_KEY); localStorage.removeItem(SAVED_WHO); } catch {}
+}
+try { localStorage.removeItem("liessure.lastCards"); } catch {}
 const cardKey = (c) => c.kind + ":" + (c.ref || c.url);
 function savedCards() {
   try { return JSON.parse(localStorage.getItem(SAVED_KEY)) || []; } catch { return []; }
@@ -1330,9 +1337,13 @@ document.getElementById("refresh").onclick = reset;
 
 // Signed in with SSO: say who, and offer sign-out.
 fetch("/api/me").then((r) => r.json()).then((me) => {
+  try {
+    if (localStorage.getItem(SAVED_WHO) !== me.user) { forgetSaved(); localStorage.setItem(SAVED_WHO, me.user); }
+  } catch {}
   if (!me.sso) return;
   const out = el("a", "icon signout", "⎋");
   out.href = "/auth/logout";
+  out.addEventListener("click", forgetSaved);
   out.title = out.ariaLabel = `Sign out${me.name ? " " + me.name : ""}`;
   document.getElementById("refresh").before(out);
 }).catch(() => {});
