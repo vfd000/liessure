@@ -146,6 +146,17 @@ class Store:
                 DROP TABLE seen_v1;""")
         self._db.commit()
 
+    def purge_kinds_not_owned(self, kinds: frozenset[str] | set[str], owner: str = "owner") -> int:
+        """Delete cards of these kinds from everyone but the owner: their history, lists and opened cards.
+        For cards built from the owner's own services that reached someone else. Returns rows removed."""
+        ks = sorted(kinds)
+        marks = ",".join("?" * len(ks))
+        with self._lock, self._db:
+            n = self._db.execute(f"DELETE FROM history WHERE user != ? AND json_extract(card, '$.kind') IN ({marks})",
+                                 (owner, *ks)).rowcount
+            n += self._db.execute(f"DELETE FROM seen WHERE user != ? AND kind IN ({marks})", (owner, *ks)).rowcount
+        return n
+
     # --- sessions
     def put_session(self, token_hash: str, sub: str, user: str, name: str, exp: float) -> None:
         with self._lock, self._db:
@@ -511,9 +522,14 @@ class Store:
                                    (time.time(), text, about, user))
         return int(cur.lastrowid)
 
-    def ideas(self, limit: int = 200) -> list[dict[str, Any]]:
+    def ideas(self, user: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        """Everyone's ideas (user=None), or one person's."""
         with self._lock:
-            rows = self._db.execute("SELECT * FROM ideas ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
+            if user is None:
+                rows = self._db.execute("SELECT * FROM ideas ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
+            else:
+                rows = self._db.execute("SELECT * FROM ideas WHERE user = ? ORDER BY ts DESC LIMIT ?",
+                                        (user, limit)).fetchall()
         return [dict(r) for r in rows]
 
     def set_idea_status(self, idea_id: int, status: str) -> bool:

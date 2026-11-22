@@ -115,7 +115,7 @@ def auth_headers_for(settings: Settings, url: str) -> dict[str, str] | None:
     """
     if settings.jellyfin.url and url.startswith(settings.jellyfin.url + "/"):
         return _jellyfin_headers(settings)
-    if settings.immich.url and url.startswith(settings.immich.url + "/"):
+    if settings.immich.url and settings.immich_api_key and url.startswith(settings.immich.url + "/"):
         return {"x-api-key": settings.immich_api_key}
     if settings.romm.url and url.startswith(settings.romm.url + "/"):
         return _romm_headers(settings)

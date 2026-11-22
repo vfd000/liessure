@@ -101,8 +101,8 @@ def parse_user_prefs(raw: str, path: str = "") -> dict[str, dict]:
     return prefs
 
 
-# Kinds only the owner sees: they read the owner's own services (jobs, lists, the lab).
-OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry", "session", "exercise", "recommend"})
+# Kinds only the owner sees: they read the owner's own services (jobs, lists, the lab, his photo library).
+OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry", "session", "exercise", "recommend", "photo"})
 
 # Kinds whose titles never go to the LLM as evidence of what you like.
 UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia", "session", "exercise"})
@@ -316,11 +316,14 @@ class Settings:
     # Home Assistant (energy from the Enphase Envoy, the weather).
     ha: Service = field(default_factory=Service)
     ha_token: str = ""
-    # Sign-in (Zitadel OIDC). Off unless the client id, secret and allowlist are all set.
+    # Sign-in (Zitadel OIDC): the client id, secret and allowlist must all be set (see require_sign_in).
     zitadel_issuer: str = "https://sso.liess.tv"
     zitadel_client_id: str = ""
     zitadel_client_secret: str = ""
     zitadel_user_subs: list[str] = field(default_factory=list)
+    # Refuse to start without sign-in (from_env: always, unless LIESSURE_AUTH=off for a local run).
+    # Without it every visitor is the owner and sees his cards, so a missing setting must not fail open.
+    require_sign_in: bool = False
     # The person whose services Liessure reads and whose data predates multi-user (axl).
     owner_sub: str = "387450248433827843"
     user_prefs: dict[str, dict] = field(default_factory=dict)
@@ -440,6 +443,7 @@ class Settings:
             zitadel_client_id=_env("ZITADEL_CLIENT_ID"),
             zitadel_client_secret=_env("ZITADEL_CLIENT_SECRET"),
             zitadel_user_subs=[x.strip() for x in _env("ZITADEL_USER_SUBS").split(",") if x.strip()],
+            require_sign_in=_env("LIESSURE_AUTH", "on").strip().lower() != "off",
             owner_sub=_env("OWNER_SUB", cls.owner_sub),
             language_wiki=_env("LANGUAGE_WIKI", "0") not in ("0", "false", "no"),
             user_prefs=parse_user_prefs(_env("USER_PREFS"), _env("USER_PREFS_FILE", "/data/user-prefs.json")),

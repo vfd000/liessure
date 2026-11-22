@@ -3,7 +3,8 @@
 // answer when the network doesn't. The cards themselves are kept by app.js
 // (localStorage); this keeps the page that renders them and their images.
 const SHELL = "liessure-shell-v2";
-const IMAGES = "liessure-img-v1";
+// v2: v1 could hold another person's photos (before photo cards were the owner's only); activate drops it.
+const IMAGES = "liessure-img-v2";
 const MAX_IMAGES = 120;
 const SHELL_FILES = ["/", "/app.js", "/style.css", "/icon.svg", "/manifest.webmanifest"];
 

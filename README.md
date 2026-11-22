@@ -178,16 +178,23 @@ the `liessure-data` volume.
 
 ## Sign-in (Zitadel)
 
-Off until `ZITADEL_CLIENT_ID`, `ZITADEL_CLIENT_SECRET` and `ZITADEL_USER_SUBS`
-are all in `.env` (`deploy/sso-bootstrap.sh` sets them: run it yourself, it
-writes to 1Password). Then every page and API call needs a session:
+Required: `ZITADEL_CLIENT_ID`, `ZITADEL_CLIENT_SECRET` and `ZITADEL_USER_SUBS`
+must all be in `.env` (`deploy/sso-bootstrap.sh` sets them: run it yourself, it
+writes to 1Password), or the server refuses to start. Without sign-in every
+visitor would be the owner, so a missing setting fails closed;
+`LIESSURE_AUTH=off` is only for a local run. Every page and API call needs a session:
 authorization code + PKCE against `sso.liess.tv`, identity from userinfo, an
 allowlist of subs checked on every request (fail closed), and a 30-day
 httpOnly session cookie whose sha256 is kept in SQLite.
 
 - The owner (`OWNER_SUB`, axl) keeps all existing data (it's keyed `owner`) and
   sees everything. Everyone else gets their own history, recall questions,
-  math progress and ideas, and no job, skill, to-do or lab-health cards (those
+  math progress and ideas. Their cards are made from the household's shared
+  libraries (Jellyfin, RomM, Invidious) and their own `USER_PREFS` entry, never
+  from the owner's accounts or profile: no photo cards (his Immich), no
+  Jellyfin watch state, none of his interests, languages, feeds or channels. A
+  reader without a prefs entry gets a plain feed until one is added. No job,
+  skill, to-do or lab-health cards either (those
   read the owner's own services).
 - The curated pool is still picked for the owner's profile; others get fresh
   cards until per-user curation (next).
