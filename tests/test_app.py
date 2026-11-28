@@ -2104,3 +2104,12 @@ def test_a_reader_has_their_own_nebula_channels_and_share():
         sign_in(a, who, AXL)
         for _ in range(5):  # his share is 0: Invidious only, and Dani's cached feed isn't his
             assert a.get("/api/card/video").json()["label"] != "Nebula"
+
+
+def test_photo_date_has_its_own_line_not_the_subtitle():
+    """The page writes the date out from photo.when, so the subtitle doesn't repeat it as 2024-05-01."""
+    asset = {"id": "p9", "localDateTime": "2024-05-01T10:00:00", "exifInfo": {"city": "Kyoto", "country": "Japan"}}
+    plain = sources._immich_card(full_settings(), asset, "")
+    assert plain.photo["when"] == "2024-05-01" and "2024" not in plain.subtitle
+    memory = sources._immich_card(full_settings(), asset, "On this day, 2 years ago")
+    assert memory.subtitle == "On this day, 2 years ago · Kyoto, Japan"
