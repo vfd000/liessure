@@ -2075,3 +2075,32 @@ def test_recommendations_from_jellyseerr_and_get_it():
         assert c.post("/api/recommend/get", json=card["request"]).json() == {"status": "requested", "id": 77}
     assert requested == [{"mediaType": "tv", "mediaId": 2, "seasons": "all"}]
 
+
+
+NEBULA_TRAVEL = """<?xml version="1.0"?><rss version="2.0"><channel><title>Jet Lag</title>
+<item><title>We raced across Japan</title><link>https://nebula.tv/videos/jetlag-japan</link>
+<description>Hide and seek.</description><author>Jet Lag: The Game</author></item></channel></rss>"""
+
+
+def test_a_reader_has_their_own_nebula_channels_and_share():
+    """Dani's prefs name her own Nebula feeds and how many of her videos come from them; axl's are untouched."""
+    who = [AXL]
+    base = sso_backend(who)
+
+    def handler(request):
+        if request.url.host == "news.test" and request.url.path == "/nebula-travel":
+            return httpx.Response(200, content=NEBULA_TRAVEL.encode())
+        return base(request)
+
+    s = sso_settings(nebula_share=0.0, user_prefs={
+        DANI: {"nebula_feeds": ["http://news.test/nebula-travel"], "nebula_share": 1.0}})
+    app = create_app(s, transport=httpx.MockTransport(handler), store=Store(":memory:"), run_curator=False)
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        for _ in range(5):
+            v = d.get("/api/card/video").json()
+            assert v["label"] == "Nebula" and v["url"] == "https://nebula.tv/videos/jetlag-japan"
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        for _ in range(5):  # his share is 0: Invidious only, and Dani's cached feed isn't his
+            assert a.get("/api/card/video").json()["label"] != "Nebula"
