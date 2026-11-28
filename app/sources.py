@@ -981,11 +981,18 @@ async def _wiki_summary(client: httpx.AsyncClient, lang: str, title: str) -> dic
     return r.json()
 
 
+def _mylab_available(s: Settings) -> bool:
+    from . import mylab  # late import
+    return mylab.available(s)
+
+
 async def homelab(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
     """Home-lab design (builds, tours, write-ups) and the tech that runs in yours."""
     options: list[tuple[Callable[[], Awaitable[Card]], int]] = []
 
-    if s.homelab_stack:
+    # With the lab's own docs on hand, "Your lab" cards (mylab.py) say how it works; a Wikipedia page about
+    # a tool in the stack is the basic version of that, so it steps aside.
+    if s.homelab_stack and not _mylab_available(s):
         async def stack() -> Card:
             data = await _wiki_summary(client, s.wikipedia_lang, rng.choice(s.homelab_stack))
             if data.get("type") == "disambiguation":
@@ -1907,6 +1914,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "exercise": bite,
     "recommend": bite,  # served by main.py (skips what this person has already seen)  # served by main.py (the Done log and Not now are per person)
     "flashcard": bite,  # served by main.py from the person's decks
+    "mylab": bite,  # served by main.py from its pool (mylab.py)
 }
 
 
@@ -1937,6 +1945,7 @@ def configured(s: Settings) -> dict[str, bool]:
         "session": bool(s.sessions_url and s.sessions_token),
         "trivia": True,
         "geoquiz": True,  # countries from Wikidata, fetched in the background (geoquiz.py)
+        "mylab": bool(s.llm_url and s.llm_key and _mylab_available(s)),  # owner only (mylab.py)
         "exercise": True,
         "recommend": bool(s.jellyseerr_url and s.jellyseerr_api_key and s.jellyfin.url and s.jellyfin_token),  # owner only; the Exercises list and the activity tracker are optional  # Jeopardy! clues, downloaded to the data volume on first use (jeopardy.py)
         "flashcard": True,  # only for people with flashcards due (main.kinds_for)

@@ -307,7 +307,7 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia", "session", "exercise", "recommend"):
+        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia", "session", "exercise", "recommend", "mylab"):
             continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
@@ -2351,3 +2351,61 @@ def test_geography_countries_survive_a_restart_and_a_wikidata_outage(tmp_path):
                     await geoquiz.countries(c, str(tmp_path))
     asyncio.run(run3())
     assert len(calls) == n + 1
+
+
+LAB_DOC = """# Reverse proxy
+
+Intro that is short.
+
+## Failover when NPM is down
+
+""" + ("NPM (VM 152) fronts every *.liess.tv host. When it is down, the gatekeeper's LAN door still answers, "
+       "because you chose to keep a second door on CT 113 instead of a hot spare: a spare doubled the cert "
+       "renewals and the access lists drifted. api_key: abcdefghijklmnop1234 ") * 3 + """
+
+## Package list
+
+""" + "nginx, certbot, sqlite, and some other packages are installed here for completeness. " * 8
+
+
+def test_your_lab_cards_come_from_the_labs_own_docs(monkeypatch, tmp_path):
+    from app import mylab
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "npm.md").write_text(LAB_DOC)
+    (tmp_path / ".claude" / "skills" / "npm").mkdir(parents=True)
+    (tmp_path / ".claude" / "skills" / "npm" / "SKILL.md").write_text("# NPM skill\n\n## Too short\n\nhi\n")
+    (tmp_path / ".dates.tsv").write_text("docs/npm.md\t2026-11-20\n")
+    mylab._cache.update(at=0.0, root="")
+    secs = mylab.sections(str(tmp_path))
+    assert [x["heading"] for x in secs] == ["Failover when NPM is down", "Package list"]
+    fail, pkgs = secs
+    assert fail["score"] > pkgs["score"] and fail["anchor"] == "failover-when-npm-is-down"
+    prompts = []
+
+    async def ask(client, s, prompt, system=""):
+        prompts.append((prompt, system))
+        return json.dumps({"cards": [
+            {"title": "Your NPM has a second door, not a spare", "body": "CT 113's gatekeeper answers on the LAN when VM 152 is down."},
+            {"title": "Leaky", "body": "The token: api_key: abcdefghijklmnop1234"}]})
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    monkeypatch.setattr(mylab, "pick", lambda secs, known, rng: next((x for x in secs if x["heading"].startswith("Failover")
+                                                                   and not any(k.startswith("mylab:docs/npm.md#failover") for k in known)), None))
+    who = [AXL]
+    app = create_app(sso_settings(llm_url="http://llm.test", llm_key="k", bb_docs_dir=str(tmp_path)),
+                     transport=httpx.MockTransport(sso_backend(who)), store=Store(":memory:"), run_curator=False)
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        assert a.get("/api/sources").json()["sources"]["mylab"]["configured"]
+        card = a.get("/api/card/mylab").json()
+        assert card["title"] == "Your NPM has a second door, not a spare" and card["label"] == "Your lab · Reverse proxy"
+        assert card["url"] == "https://github.com/vfd000/bb/blob/main/docs/npm.md#failover-when-npm-is-down"
+        assert "abcdefghijklmnop1234" not in prompts[0][0] and "[redacted]" in prompts[0][0]  # secrets never sent
+        assert card["subtitle"] == "Failover when NPM is down · updated 2026-11-20" and "as of 2026-11" in prompts[0][0]
+        titles = {r.json()["title"] for r in (a.get("/api/card/mylab") for _ in range(6)) if r.status_code == 200}
+        assert titles <= {"Your NPM has a second door, not a spare"}  # the card that repeated a secret was dropped
+        # The Wikipedia-about-your-stack option steps aside while the lab's docs are there.
+        assert all(a.get("/api/card/homelab").json().get("label") != "Home lab · in your stack" for _ in range(8))
+    with TestClient(app, base_url="https://testserver") as d:
+        app.state.sso.allowed.add(DANI)
+        sign_in(d, who, DANI)
+        assert d.get("/api/card/mylab").status_code == 404 or d.get("/api/card/mylab").status_code == 503

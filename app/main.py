@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 import dataclasses
 
-from . import auth, avoid, curator, geoquiz, exercise, flashcards, lessons, lyrics, profile, reader, recommend, sources
+from . import auth, avoid, curator, geoquiz, mylab, exercise, flashcards, lessons, lyrics, profile, reader, recommend, sources
 from .config import LESSON_LABELS
 from .config import KINDS, MAX_PER_LOAD, OWNER_ONLY_KINDS, RECALL_KINDS, Settings
 from .store import Store
@@ -515,6 +515,8 @@ def create_app(
             return await own_bite(client, user, rng)
         if kind == "todo":
             return await todo_card(client, rng)
+        if kind == "mylab":
+            return await own_lab(client, rng)
         if kind == "exercise":
             return await exercise_card(client, rng, user)
         if kind == "recommend":
@@ -563,6 +565,17 @@ def create_app(
             except httpx.HTTPError as e:
                 log.warning("bites for %s: %s", user, e)
             pick = store.take(pool, rng.random())
+        return pick["card"] if pick else None
+
+    async def own_lab(client: httpx.AsyncClient, rng: random.Random) -> dict | None:
+        """How the owner's lab works, from its own docs: from the pool, topped up a section at a time."""
+        pick = store.take(mylab.POOL, rng.random())
+        if not pick and settings.curator_enabled:
+            try:
+                await mylab.generate(client, settings, store, rng, curator.ask_llm)
+            except httpx.HTTPError as e:
+                log.warning("your lab: %s", e)
+            pick = store.take(mylab.POOL, rng.random())
         return pick["card"] if pick else None
 
     async def own_career(client: httpx.AsyncClient, user: str, rng: random.Random) -> dict | None:
