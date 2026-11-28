@@ -307,7 +307,7 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia", "session", "exercise", "recommend", "mylab"):
+        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia", "session", "exercise", "recommend", "mylab", "focus"):
             continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
@@ -2409,3 +2409,135 @@ def test_your_lab_cards_come_from_the_labs_own_docs(monkeypatch, tmp_path):
         app.state.sso.allowed.add(DANI)
         sign_in(d, who, DANI)
         assert d.get("/api/card/mylab").status_code == 404 or d.get("/api/card/mylab").status_code == 503
+
+
+CF_ROOT = """# Cloudflare Developer Documentation
+
+## Application security
+
+- [Cloudflare One](https://developers.cloudflare.com/cloudflare-one/llms.txt): Zero Trust
+- [Tunnel](https://developers.cloudflare.com/tunnel/llms.txt): Connect origins
+"""
+CF_ONE = """# Cloudflare One
+
+- [Clientless SSH](https://developers.cloudflare.com/cloudflare-one/setup/secure-private-apps/clientless-ssh/index.md): In-browser SSH through Access.
+"""
+CF_TUNNEL = """# Tunnel
+
+- [Tunnel](https://developers.cloudflare.com/tunnel/index.md): Connect origins.
+"""
+CF_PAGE = "---\ntitle: Clientless SSH\n---\n\n# Clientless SSH\n\n" + ("Access renders an SSH terminal in the browser. " * 20)
+CF_BLOG = """<?xml version="1.0"?><rss version="2.0"><channel><title>Cloudflare Blog</title>
+<item><title>Mesh is here</title><link>https://blog.cloudflare.com/mesh/</link><description>Device to device.</description>
+<pubDate>Fri, 27 Nov 2026 10:00:00 GMT</pubDate></item></channel></rss>"""
+
+
+def _focus_backend(base):
+    def handler(request):
+        u = str(request.url)
+        if u == "https://developers.cloudflare.com/llms.txt":
+            return httpx.Response(200, text=CF_ROOT)
+        if u.endswith("/cloudflare-one/llms.txt"):
+            return httpx.Response(200, text=CF_ONE)
+        if u.endswith("/tunnel/llms.txt"):
+            return httpx.Response(200, text=CF_TUNNEL)
+        if u.endswith("/index.md"):
+            return httpx.Response(200, text=CF_PAGE, headers={"content-type": "text/markdown"})
+        if u == "https://blog.cloudflare.com/rss/":
+            return httpx.Response(200, text=CF_BLOG)
+        if u == "https://blog.cloudflare.com/mesh/":
+            return httpx.Response(200, text="<html><nav>menu</nav><article>" + "Mesh connects devices. " * 30 + "</article></html>")
+        if u.startswith("https://developers.cloudflare.com/changelog"):
+            return httpx.Response(200, text=CF_BLOG.replace("Mesh is here", "Changelog: Mesh").replace("/mesh/", "/mesh/"))
+        return base(request)
+    return handler
+
+
+def test_research_focus_add_study_and_remove(monkeypatch):
+    from app import focus as fo
+    fo._index_cache.data.clear(); fo._feed_cache.data.clear()
+    prompts = []
+
+    async def ask(client, s, prompt, system=""):
+        prompts.append(prompt)
+        n = len(prompts)
+        return json.dumps({"cards": [{"title": f"Clientless SSH in the browser {n}", "body": "Turn it on in Access."},
+                                     {"title": f"Short-lived certs {n}", "body": "No keys to hand out."}]})
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    who = [AXL]
+    app = create_app(sso_settings(llm_url="http://llm.test", llm_key="k"),
+                     transport=httpx.MockTransport(_focus_backend(sso_backend(who))), store=Store(":memory:"),
+                     run_curator=False)
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        assert a.get("/api/card/focus").status_code != 200  # nothing to study yet: not one of their kinds
+        r = a.post("/api/me/focus", json={"topic": "Cloudflare", "why": "all its capabilities, mostly for work"})
+        assert r.status_code == 200
+        fid = r.json()["id"]
+        got = a.get("/api/me/focus").json()["focus"]
+        assert got[0]["topic"] == "Cloudflare" and "https://developers.cloudflare.com/llms.txt" in got[0]["uses"]  # the preset
+        cards = [a.get("/api/card/focus").json() for _ in range(4)]
+        assert all(c["kind"] == "focus" and c["label"].startswith("Focus · Cloudflare") for c in cards)
+        assert any(c["url"] in ("https://developers.cloudflare.com/cloudflare-one/setup/secure-private-apps/clientless-ssh/",
+                                "https://developers.cloudflare.com/tunnel/", "https://blog.cloudflare.com/mesh/") for c in cards)
+        assert all("index.md" not in c["url"] for c in cards)
+        assert "Why: all its capabilities, mostly for work" in prompts[0] and "<page-text>" in prompts[0]
+        assert "menu" not in "".join(prompts)  # page chrome is dropped before the model sees it
+        kinds = {c["kind"] for _ in range(4) for c in a.get("/api/feed?n=6&kinds=focus").json()["cards"]}
+        assert kinds == {"focus"}
+        assert a.post("/api/me/focus", json={"topic": "x"}).status_code == 422
+        assert a.post("/api/me/focus", json={"topic": "Rust", "sources": ["not a url with spaces"]}).status_code in (200, 422)
+        assert a.delete(f"/api/me/focus/{fid}").status_code == 200
+        # Cards of a focus that's gone don't come back.
+        for _ in range(5):
+            r = a.get("/api/card/focus")
+            assert r.status_code != 200 or "Cloudflare" not in r.json()["label"]
+        assert a.delete("/api/me/focus/999").status_code == 404
+    with TestClient(app, base_url="https://testserver") as d:  # one reader's focus isn't another's
+        app.state.sso.allowed.add(DANI)
+        sign_in(d, who, DANI)
+        assert d.get("/api/me/focus").json()["focus"] == []
+
+
+def test_focus_sources_and_text():
+    from app import focus as fo
+    assert fo.kind_of("https://developers.cloudflare.com/llms.txt") == "index"
+    assert fo.kind_of("https://blog.cloudflare.com/rss/") == "feed"
+    assert fo.kind_of("https://developers.cloudflare.com/changelog/rss/index.xml") == "feed"
+    assert fo.kind_of("https://example.com/guide") == "page"
+    assert fo.human_url("https://d.example/a/b/index.md") == "https://d.example/a/b/"
+    assert fo.sources_for({"topic": "Learn Cloudflare at work", "sources": []}) == fo.PRESETS["cloudflare"]
+    assert fo.sources_for({"topic": "Rust", "sources": []}) == []
+    assert fo.parse_index(CF_ROOT)[0] == {"title": "Cloudflare One", "url": "https://developers.cloudflare.com/cloudflare-one/llms.txt",
+                                          "about": "Zero Trust"}
+    assert fo.to_text(CF_PAGE, "text/markdown").startswith("# Clientless SSH")
+    assert fo.to_text("<html><script>x()</script><main><p>Hello &amp; bye</p></main></html>", "text/html") == "Hello & bye"
+
+
+def test_focus_skips_pages_that_dont_teach_a_capability():
+    from app import focus as fo
+    fo._index_cache.data.clear()
+    idx = """# P
+- [Platform](https://d.example/basin/platform/index.md): pricing and limits
+- [Pricing](https://d.example/basin/pricing/index.md): what it costs
+- [API reference](https://d.example/basin/api/index.md): endpoints
+- [Route requests to R2](https://d.example/basin/how-to/route/index.md): use Cloud Connector
+"""
+    def h(request):
+        return httpx.Response(200, text=idx)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(h)) as c:
+            return await fo.index_pages(c, "https://d.example/basin/llms.txt", random.Random(1))
+    assert [p["title"] for p in asyncio.run(run())] == ["Route requests to R2"]
+    root = "- [Basin](https://d.example/basin/llms.txt): data\n"
+    idx2 = idx
+
+    def h2(request):
+        return httpx.Response(200, text=root if request.url.path == "/llms.txt" else idx2)
+
+    async def run2():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(h2)) as c:
+            return await fo.index_pages(c, "https://d.example/llms.txt", random.Random(1))
+    fo._index_cache.data.clear()
+    assert [(p["title"], p["product"]) for p in asyncio.run(run2())] == [("Route requests to R2", "Basin")]

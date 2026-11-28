@@ -4,7 +4,7 @@
 const LABELS = {
   wikipedia: "Wikipedia", news: "News", game: "Games", video: "Videos", movie: "Movies",
   show: "Series", song: "Music", photo: "Photos", language: "Telugu", homelab: "Home lab",
-  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers", kquiz: "K-drama", geoquiz: "Geography", mylab: "Your lab", trivia: "Jeopardy!", exercise: "Exercise", recommend: "Recommendations", session: "Claude sessions",
+  job: "Jobs", skill: "Skills", telemetry: "Lab health", home: "Home", math: "Math", recall: "Recall", todo: "To do", infosec: "Infosec", bite: "Bite-size", lesson: "Lessons", career: "Careers", kquiz: "K-drama", geoquiz: "Geography", mylab: "Your lab", focus: "Focus", trivia: "Jeopardy!", exercise: "Exercise", recommend: "Recommendations", session: "Claude sessions",
 };
 const android = window.LiessureAndroid || null; // injected by the Android app
 // The page's own words in the reader's language (/api/me's lang); cards carry their own.
@@ -69,6 +69,15 @@ const UI = {
     "Taken": "Tomada", "Where": "Dónde", "Coordinates": "Coordenadas", "Camera": "Cámara", "Lens": "Objetivo",
     "Exposure": "Exposición", "Size": "Tamaño", "Map": "Mapa", "What's nearby": "Qué hay cerca",
     "Description": "Descripción", "Details": "Detalles", "Geography": "Geografía", "Jeopardy!": "Jeopardy!",
+    "Focus": "Enfoque", "What you're studying": "Lo que estás estudiando", "Start studying it": "Empezar a estudiarlo",
+    "Cards that make you better at it, from its own docs, blog and changelog.":
+      "Tarjetas para mejorar en ello, de su propia documentación, blog y novedades.",
+    "Stop studying this": "Dejar de estudiarlo", "Saving…": "Guardando…", "Couldn't add it": "No se pudo añadir",
+    "Added. Its first cards are being written; they'll turn up in the feed and under the Focus chip.":
+      "Añadido. Se están escribiendo sus primeras tarjetas; aparecerán en el feed y en el chip Enfoque.",
+    "new": "novedad", "Topic, e.g. Cloudflare": "Tema, p. ej. cerámica",
+    "Why: e.g. use all of its capabilities, at work and in the home lab": "Por qué: p. ej. para empezar a hacer piezas en casa",
+    "Sources, one per line (optional): a docs site, its llms.txt, a blog feed": "Fuentes, una por línea (opcional): un sitio, su llms.txt, el feed de un blog",
   },
 };
 const t = (s) => (UI[UI_LANG] && UI[UI_LANG][s]) || s;
@@ -1427,6 +1436,67 @@ document.getElementById("idea-form").onsubmit = async (e) => {
     showIdeas();
   } catch {
     ideaStatus.textContent = "Couldn't save it (offline?). Your text is still here.";
+  }
+};
+// Research focus: topics this reader is studying; their cards come from the topic's own docs and posts.
+const focusDialog = document.getElementById("focus-dialog");
+const focusStatus = document.getElementById("focus-status");
+async function refreshChips() {
+  try {
+    const { sources } = await (await fetch("/api/sources")).json();
+    configured = Object.keys(sources).filter((k) => sources[k].configured && sources[k].weight > 0);
+    renderChips();
+  } catch {}
+}
+function showFocus(list) {
+  const ul = document.getElementById("focus-list");
+  ul.replaceChildren(...list.map((f) => {
+    const li = el("li", "", f.topic + (f.why ? ` — ${f.why}` : ""));
+    const src = (f.uses || []).map((u) => new URL(u).host).filter((h, i, a) => a.indexOf(h) === i);
+    if (src.length) li.append(el("div", "subtitle", src.join(" · ")));
+    const x = el("button", "chip", "✕");
+    x.title = x.ariaLabel = t("Stop studying this");
+    x.onclick = async (e) => {
+      e.preventDefault();
+      const r = await fetch(`/api/me/focus/${f.id}`, { method: "DELETE" });
+      if (r.ok) { showFocus((await r.json()).focus); refreshChips(); }
+    };
+    li.append(x);
+    return li;
+  }));
+}
+document.getElementById("focus-open").onclick = async () => {
+  focusStatus.hidden = true;
+  for (const [id, s] of [["focus-h", "What you're studying"], ["focus-add", "Start studying it"], ["focus-close", "Close"],
+    ["focus-intro", "Cards that make you better at it, from its own docs, blog and changelog."]]) document.getElementById(id).textContent = t(s);
+  for (const id of ["focus-topic", "focus-why", "focus-sources"]) {
+    const box = document.getElementById(id);
+    box.placeholder = t(box.dataset.ph || (box.dataset.ph = box.placeholder));
+  }
+  try { showFocus((await (await fetch("/api/me/focus")).json()).focus); } catch { showFocus([]); }
+  focusDialog.showModal();
+};
+document.getElementById("focus-close").onclick = () => focusDialog.close();
+document.getElementById("focus-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const topic = document.getElementById("focus-topic").value.trim();
+  if (!topic) return;
+  const why = document.getElementById("focus-why").value.trim();
+  const sources = document.getElementById("focus-sources").value.split(/\s+/).filter(Boolean);
+  focusStatus.hidden = false;
+  focusStatus.textContent = t("Saving…");
+  try {
+    const r = await fetch("/api/me/focus", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ topic, why, sources }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : r.status);
+    for (const id of ["focus-topic", "focus-why", "focus-sources"]) document.getElementById(id).value = "";
+    focusStatus.textContent = t("Added. Its first cards are being written; they'll turn up in the feed and under the Focus chip.");
+    const all = await (await fetch("/api/me/focus")).json();
+    showFocus(all.focus);
+    refreshChips();
+  } catch (err) {
+    focusStatus.textContent = t("Couldn't add it") + ": " + err.message;
   }
 };
 addEventListener("online", () => { if (offline) reset(); });

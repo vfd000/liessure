@@ -1915,6 +1915,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "recommend": bite,  # served by main.py (skips what this person has already seen)  # served by main.py (the Done log and Not now are per person)
     "flashcard": bite,  # served by main.py from the person's decks
     "mylab": bite,  # served by main.py from its pool (mylab.py)
+    "focus": bite,  # served by main.py from the reader's own pool (focus.py)
 }
 
 
@@ -1946,6 +1947,7 @@ def configured(s: Settings) -> dict[str, bool]:
         "trivia": True,
         "geoquiz": True,  # countries from Wikidata, fetched in the background (geoquiz.py)
         "mylab": bool(s.llm_url and s.llm_key and _mylab_available(s)),  # owner only (mylab.py)
+        "focus": bool(s.llm_url and s.llm_key),  # for readers with a research focus (main.kinds_for)
         "exercise": True,
         "recommend": bool(s.jellyseerr_url and s.jellyseerr_api_key and s.jellyfin.url and s.jellyfin_token),  # owner only; the Exercises list and the activity tracker are optional  # Jeopardy! clues, downloaded to the data volume on first use (jeopardy.py)
         "flashcard": True,  # only for people with flashcards due (main.kinds_for)
