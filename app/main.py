@@ -329,6 +329,10 @@ def create_app(
             changes["wiki_interests"] = list(p["interests"])
         if p.get("video_topics"):
             changes["invidious_topics"] = list(p["video_topics"])
+        if p.get("nebula_feeds"):
+            changes["nebula_feeds"] = list(p["nebula_feeds"])
+        if p.get("nebula_share") is not None:
+            changes["nebula_share"] = max(0.0, min(1.0, float(p["nebula_share"])))
         if p.get("learning"):
             changes["languages_learning"] = [(x["name"], x["code"]) for x in p["learning"]]
             changes["languages_curious"] = []

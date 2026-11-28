@@ -67,7 +67,7 @@ RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "
 # come from USER_PREFS_FILE (default /data/user-prefs.json, on the server's data volume) and USER_PREFS
 # (JSON, overrides the file). Shape of one entry:
 #   {"lang": "es", "lang_name": "Spanish", "wikipedia": "es", "news_feeds": [...], "interests": [...],
-#    "video_topics": [...], "learning": [{"name": "English", "label": "Inglés", "code": "en",
+#    "video_topics": [...], "nebula_feeds": [...], "nebula_share": 0.5, "learning": [{"name": "English", "label": "Inglés", "code": "en",
 #    "style": "reading" | "beginner"}], "kinds_off": [...],
 #    "career": {"now": "...", "likes": [...], "explore": [...]}, "labels": {...}}
 # Interests and languages move to the household graph with per-user curation.
@@ -258,6 +258,8 @@ class Settings:
     # Where "Open" goes for a YouTube video: "youtube" (the app) or "invidious".
     video_link: str = "youtube"
     nebula_feeds: list[str] = field(default_factory=list)
+    # The share of video cards that come from Nebula when Invidious is also configured.
+    nebula_share: float = 0.25
 
     travel: Service = field(default_factory=Service)
     travel_token: str = ""
@@ -396,6 +398,7 @@ class Settings:
             invidious_watch_token=_env("INVIDIOUS_WATCH_TOKEN"),
             video_link=_env("VIDEO_LINK", "youtube"),
             nebula_feeds=parse_list(_env("NEBULA_FEEDS", "https://rss.nebula.app/video.rss")),
+            nebula_share=float(_env("NEBULA_SHARE", "0.25")),
             travel=svc("TRAVEL"),
             travel_token=_env("TRAVEL_TOKEN"),
             graph=svc("GRAPH"),

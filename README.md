@@ -27,7 +27,7 @@ feed, so a fresh deploy shows Wikipedia and language cards only.
 |---|---|---|
 | `wikipedia` | Wikipedia random article (best of 3 draws, skips stubs) | `WIKIPEDIA_LANG` (default `en`) |
 | `game` | RomM random game. On Android, "Play in Argosy" fires `argosy://launch?romm_id=N` (Argosy downloads it if needed and starts the emulator); "Play in browser" opens EmulatorJS | `ROMM_URL`, `ROMM_TOKEN` *or* `ROMM_USERNAME` + `ROMM_PASSWORD`, `ARGOSY` |
-| `video` | Invidious search over a topic list (no Shorts, nothing under 3 min), plus Nebula's RSS feeds | `INVIDIOUS_URL`, `INVIDIOUS_TOPICS`, `NEBULA_FEEDS`, `VIDEO_LINK` |
+| `video` | Invidious search over a topic list (no Shorts, nothing under 3 min), plus Nebula's RSS feeds (`NEBULA_SHARE` of video cards, 0.25; a reader's prefs can name their own `nebula_feeds`, e.g. `https://rss.nebula.app/video/channels/jetlag.rss`, and `nebula_share`) | `INVIDIOUS_URL`, `INVIDIOUS_TOPICS`, `NEBULA_FEEDS`, `NEBULA_SHARE`, `VIDEO_LINK` |
 | `movie`, `show` | Jellyfin random item, unwatched first if a user id is set; trailer plays inline | `JELLYFIN_URL`, `JELLYFIN_TOKEN`, `JELLYFIN_USER_ID` |
 | `song` | Jellyfin random track, plays inline; "Open Symfonium" on Android | same, plus `MUSIC_APP_PACKAGE` / `MUSIC_APP_NAME` |
 | `photo` | Immich `search/random`, or a today's memory about a third of the time | `IMMICH_URL`, `IMMICH_API_KEY` (read scopes only) |

@@ -674,7 +674,9 @@ def nebula_card(item: dict[str, Any]) -> Card:
 
 
 async def nebula_items(client: httpx.AsyncClient, s: Settings) -> list[dict[str, Any]]:
-    hit = _nebula_cache.get("all")
+    # Keyed by the feed list: each reader can have their own Nebula channels.
+    key = tuple(s.nebula_feeds)
+    hit = _nebula_cache.get(key)
     if hit is not None:
         return hit
     items: list[dict[str, Any]] = []
@@ -685,7 +687,7 @@ async def nebula_items(client: httpx.AsyncClient, s: Settings) -> list[dict[str,
             items += parse_feed(r.content)
         except (httpx.HTTPError, ElementTree.ParseError) as e:
             log.warning("nebula feed %s failed: %s", url, e)
-    _nebula_cache.put("all", items)
+    _nebula_cache.put(key, items)
     return items
 
 
@@ -720,7 +722,7 @@ async def _random_video(client: httpx.AsyncClient, s: Settings, rng: random.Rand
 
 
 async def video(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
-    if s.nebula_feeds and (not s.invidious.url or rng.random() < 0.25):
+    if s.nebula_feeds and (not s.invidious.url or rng.random() < s.nebula_share):
         items = await nebula_items(client, s)
         if items:
             return nebula_card(rng.choice(items))
