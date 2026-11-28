@@ -16,6 +16,7 @@
     <button id="podcast" class="icon" aria-label="Listen to the feed" title="Listen to the feed">🎧</button>
     <button id="decks" class="icon" aria-label="Flashcards" title="Flashcards">🃏</button>
     <button id="search" class="icon" aria-label="Search cards you've seen" title="Search cards you've seen">🔍</button>
+    <button id="focus-open" class="icon" aria-label="What you're studying" title="What you're studying">🎯</button>
     <button id="idea" class="icon" aria-label="Suggest an improvement" title="Suggest an improvement">💡</button>
     <button id="refresh" class="icon" aria-label="New feed" title="New feed">↻</button>
   </header>
@@ -30,6 +31,21 @@
       </div>
       <p id="idea-status" class="why" hidden></p>
       <ul id="idea-list" class="idea-list"></ul>
+    </form>
+  </dialog>
+  <dialog id="focus-dialog" class="ideas">
+    <form method="dialog" id="focus-form">
+      <h2 id="focus-h">What you're studying</h2>
+      <p class="why" id="focus-intro">Cards that make you better at it, from its own docs, blog and changelog.</p>
+      <ul id="focus-list" class="idea-list focus-list"></ul>
+      <input id="focus-topic" maxlength="80" placeholder="Topic, e.g. Cloudflare" required>
+      <textarea id="focus-why" rows="2" maxlength="400" placeholder="Why: e.g. use all of its capabilities, at work and in the home lab"></textarea>
+      <textarea id="focus-sources" rows="2" placeholder="Sources, one per line (optional): a docs site, its llms.txt, a blog feed"></textarea>
+      <div class="actions">
+        <button type="submit" class="primary" id="focus-add">Start studying it</button>
+        <button type="button" id="focus-close">Close</button>
+      </div>
+      <p id="focus-status" class="why" hidden></p>
     </form>
   </dialog>
   <div id="banner" class="banner" hidden>You were heading to Reddit. Here's something of yours instead.</div>

@@ -154,3 +154,8 @@ body {
 .offline { color: var(--muted); font-size: 14px; padding: 12px 4px; border-top: 1px solid currentColor; margin-top: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+.focus-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; color: var(--ink); }
+.focus-list li .subtitle { flex-basis: 100%; order: 3; }
+.focus-list li .chip { margin-left: auto; }
+#focus-form input, #focus-form textarea { width: 100%; box-sizing: border-box; margin: 6px 0; }

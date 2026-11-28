@@ -55,14 +55,15 @@ DEFAULT_WEIGHTS = {
     "flashcard": 3,
     "geoquiz": 1,
     "mylab": 3,
+    "focus": 4,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "session": 2, "exercise": 1, "recommend": 1, "flashcard": 2, "geoquiz": 2, "mylab": 2}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "session": 2, "exercise": 1, "recommend": 1, "flashcard": 2, "geoquiz": 2, "mylab": 2, "focus": 2}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
-RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite", "mylab"})
+RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite", "mylab", "focus"})
 
 # Per-person preferences, keyed by Zitadel sub: what someone reads in, their interests, what they're
 # learning, careers they're exploring. They're personal, so they never live in this (public) repo: they
@@ -108,7 +109,7 @@ def parse_user_prefs(raw: str, path: str = "") -> dict[str, dict]:
 OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry", "session", "exercise", "recommend", "mylab"})
 
 # Kinds whose titles never go to the LLM as evidence of what you like.
-UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia", "session", "exercise", "geoquiz", "mylab"})
+UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia", "session", "exercise", "geoquiz", "mylab", "focus"})
 
 KINDS = tuple(DEFAULT_WEIGHTS)
 

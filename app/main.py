@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
+from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
@@ -22,7 +23,7 @@ from pydantic import BaseModel, Field
 
 import dataclasses
 
-from . import auth, avoid, curator, geoquiz, mylab, exercise, flashcards, lessons, lyrics, profile, reader, recommend, sources
+from . import auth, avoid, curator, focus, geoquiz, mylab, exercise, flashcards, lessons, lyrics, profile, reader, recommend, sources
 from .config import LESSON_LABELS
 from .config import KINDS, MAX_PER_LOAD, OWNER_ONLY_KINDS, RECALL_KINDS, Settings
 from .store import Store
@@ -41,6 +42,9 @@ TRANSLATED = {
 # Kinds skipped, rather than shown in English, when the translation isn't there in time.
 STRICT_TRANSLATED = frozenset({"math", "home"})
 TRANSLATE_WAIT = 6.0
+# Research focus: keep this many cards ready per reader, adding this many pages (2-3 cards each) at a time;
+# with none ready, a card waits this long for the first page.
+FOCUS_POOL_LOW, FOCUS_TOP_UP, FOCUS_FIRST_WAIT = 6, 3, 25.0
 
 
 def _get(card: dict, path: str):
@@ -171,6 +175,12 @@ class Grade(BaseModel):
 
 class AvoidTerm(BaseModel):
     term: str = Field(min_length=1, max_length=60)
+
+
+class Focus(BaseModel):
+    topic: str = Field(min_length=2, max_length=80)
+    why: str = Field("", max_length=400)
+    sources: list[str] = Field(default_factory=list, max_length=10)
 
 
 class Idea(BaseModel):
@@ -321,6 +331,38 @@ def create_app(
         resp.delete_cookie(auth.COOKIE)
         return resp
 
+    @app.get("/api/me/focus")
+    async def focus_list(request: Request):
+        """What this reader is studying, and the sources each one draws on (presets included)."""
+        return {"focus": [{**f, "uses": focus.sources_for(f)} for f in store.focuses(request.state.user)]}
+
+    @app.post("/api/me/focus")
+    async def focus_add(request: Request, f: Focus):
+        """Start studying something: a topic, why, and optional sources (an llms.txt docs index, a feed,
+        a page, or a site, which is tried as <site>/llms.txt)."""
+        urls = []
+        for u in f.sources:
+            u = u.strip()
+            if not u:
+                continue
+            if not u.startswith(("http://", "https://")):
+                u = "https://" + u
+            if not urlparse(u).netloc:
+                raise HTTPException(422, f"not a link: {u}")
+            urls.append(u)
+        user = request.state.user
+        fid = store.add_focus(user, " ".join(f.topic.split()), " ".join(f.why.split()), urls)
+        task = focus_tasks.get(user)
+        if task is None or task.done():  # start on its first cards now
+            focus_tasks[user] = asyncio.create_task(_focus_top_up(request.app.state.client, user, FOCUS_TOP_UP))
+        return {"id": fid, "focus": store.focuses(user)}
+
+    @app.delete("/api/me/focus/{focus_id}")
+    async def focus_remove(request: Request, focus_id: int):
+        if not store.remove_focus(request.state.user, focus_id):
+            raise HTTPException(404, "no such focus")
+        return {"focus": store.focuses(request.state.user)}
+
     @app.get("/api/me/avoid")
     async def avoid_list(request: Request):
         return {"avoid": store.avoid_list(request.state.user), "suggested": avoid.SUGGESTED}
@@ -420,6 +462,8 @@ def create_app(
             kinds.discard("kquiz")
         if not store.decks(user):
             kinds.discard("flashcard")
+        if not store.focuses(user):
+            kinds.discard("focus")
         return kinds
 
     async def one(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
@@ -517,6 +561,8 @@ def create_app(
             return await todo_card(client, rng)
         if kind == "mylab":
             return await own_lab(client, rng)
+        if kind == "focus":
+            return await own_focus(client, user, rng)
         if kind == "exercise":
             return await exercise_card(client, rng, user)
         if kind == "recommend":
@@ -577,6 +623,47 @@ def create_app(
                 log.warning("your lab: %s", e)
             pick = store.take(mylab.POOL, rng.random())
         return pick["card"] if pick else None
+
+    focus_tasks: dict[str, asyncio.Task] = {}
+
+    async def _focus_top_up(client: httpx.AsyncClient, user: str, pages: int) -> None:
+        rng = random.Random()
+        lang = prefs_for(user).get("lang_name", "")
+        for _ in range(pages):
+            mine = store.focuses(user)
+            if not mine:
+                return
+            try:
+                await focus.generate(client, settings_for(user), store, user, rng.choice(mine), rng,
+                                     curator.ask_llm, write_in="" if lang in ("", "English") else lang)
+            except (httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+                log.warning("focus for %s: %s: %s", user, type(e).__name__, e)
+
+    async def own_focus(client: httpx.AsyncClient, user: str, rng: random.Random) -> dict | None:
+        """Cards on what this reader is studying, from their own pool, topped up in the background a few
+        pages ahead; only an empty pool waits for the model. Cards of a focus they've removed are dropped."""
+        if not settings.curator_enabled:
+            return None
+        pool = f"focus:{user}"
+        active = {f["id"] for f in store.focuses(user)}
+        task = focus_tasks.get(user)
+        if (task is None or task.done()) and store.pool_size(pool) < FOCUS_POOL_LOW:
+            focus_tasks[user] = task = asyncio.create_task(_focus_top_up(client, user, FOCUS_TOP_UP))
+        for attempt in range(6):
+            pick = store.take(pool, rng.random())
+            if pick is None and attempt == 0 and task is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), FOCUS_FIRST_WAIT)
+                except asyncio.TimeoutError:
+                    pass
+                pick = store.take(pool, rng.random())
+            if pick is None:
+                return None
+            fid = str(pick["ref"]).split(":")[1] if str(pick["ref"]).count(":") >= 2 else ""
+            if fid.isdigit() and int(fid) in active:
+                return pick["card"]
+            store.drop(pool, pick["ref"])
+        return None
 
     async def own_career(client: httpx.AsyncClient, user: str, rng: random.Random) -> dict | None:
         """Careers this person is exploring, in their language, from their own pool."""

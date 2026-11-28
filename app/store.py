@@ -36,6 +36,15 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_kind_ts ON events (kind, ts);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS focus (          -- topics a reader is deliberately studying (focus.py)
+    id      INTEGER PRIMARY KEY,
+    user    TEXT NOT NULL,
+    topic   TEXT NOT NULL,
+    why     TEXT NOT NULL DEFAULT '',
+    sources TEXT NOT NULL DEFAULT '[]',     -- JSON list of URLs: llms.txt indexes, feeds, pages
+    created REAL NOT NULL,
+    active  INTEGER NOT NULL DEFAULT 1      -- removed focuses stay, so their card refs stay unique
+);
 CREATE TABLE IF NOT EXISTS ideas (
     id      INTEGER PRIMARY KEY,
     ts      REAL NOT NULL,
@@ -505,6 +514,24 @@ class Store:
             self._db.execute("DELETE FROM avoid WHERE user = ? AND term = ?", (user, term.strip().casefold()))
 
     # --- ideas: improvements jotted down in the app, to build later
+    # --- research focus (focus.py)
+    def focuses(self, user: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM focus WHERE user = ? AND active = 1 ORDER BY created",
+                                    (user,)).fetchall()
+        return [{**dict(r), "sources": json.loads(r["sources"] or "[]")} for r in rows]
+
+    def add_focus(self, user: str, topic: str, why: str = "", sources: list[str] | None = None) -> int:
+        with self._lock, self._db:
+            cur = self._db.execute("INSERT INTO focus (user, topic, why, sources, created) VALUES (?, ?, ?, ?, ?)",
+                                   (user, topic, why, json.dumps(sources or []), time.time()))
+        return int(cur.lastrowid)
+
+    def remove_focus(self, user: str, focus_id: int) -> bool:
+        with self._lock, self._db:
+            cur = self._db.execute("UPDATE focus SET active = 0 WHERE id = ? AND user = ?", (focus_id, user))
+        return cur.rowcount == 1
+
     def add_idea(self, text: str, about: str = "", user: str = "owner") -> int:
         with self._lock, self._db:
             cur = self._db.execute("INSERT INTO ideas (ts, text, about, user) VALUES (?, ?, ?, ?)",
