@@ -2409,3 +2409,24 @@ def test_your_lab_cards_come_from_the_labs_own_docs(monkeypatch, tmp_path):
         app.state.sso.allowed.add(DANI)
         sign_in(d, who, DANI)
         assert d.get("/api/card/mylab").status_code == 404 or d.get("/api/card/mylab").status_code == 503
+
+
+def test_the_home_lab_chip_includes_your_lab(monkeypatch, tmp_path):
+    from app import mylab
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "npm.md").write_text(LAB_DOC)
+    mylab._cache.update(at=0.0, root="")
+    calls = []
+
+    async def ask(client, s, prompt, system=""):
+        calls.append(1)
+        return json.dumps({"cards": [{"title": f"Your NPM has a second door {len(calls)}", "body": "CT 113 answers."}]})
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    who = [AXL]
+    app = create_app(sso_settings(llm_url="http://llm.test", llm_key="k", bb_docs_dir=str(tmp_path)),
+                     transport=httpx.MockTransport(sso_backend(who)), store=Store(":memory:"), run_curator=False)
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        kinds = [c["kind"] for _ in range(6) for c in a.get("/api/feed?n=6&kinds=homelab").json()["cards"]]
+        assert "mylab" in kinds and set(kinds) <= {"homelab", "mylab"}
+        assert len(calls) <= 2 * 3  # topped up a few sections at a time, not once per card

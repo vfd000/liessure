@@ -41,6 +41,9 @@ TRANSLATED = {
 # Kinds skipped, rather than shown in English, when the translation isn't there in time.
 STRICT_TRANSLATED = frozenset({"math", "home"})
 TRANSLATE_WAIT = 6.0
+# Your lab: keep at least this many cards ready, adding this many sections (2-3 cards each) at a time;
+# with none ready, a card waits this long for the first section.
+LAB_POOL_LOW, LAB_TOP_UP, LAB_FIRST_WAIT = 6, 3, 25.0
 
 
 def _get(card: dict, path: str):
@@ -567,14 +570,30 @@ def create_app(
             pick = store.take(pool, rng.random())
         return pick["card"] if pick else None
 
-    async def own_lab(client: httpx.AsyncClient, rng: random.Random) -> dict | None:
-        """How the owner's lab works, from its own docs: from the pool, topped up a section at a time."""
-        pick = store.take(mylab.POOL, rng.random())
-        if not pick and settings.curator_enabled:
+    lab_task: list[asyncio.Task | None] = [None]
+
+    async def _lab_top_up(client: httpx.AsyncClient, rng: random.Random, sections: int) -> None:
+        for _ in range(sections):
             try:
                 await mylab.generate(client, settings, store, rng, curator.ask_llm)
-            except httpx.HTTPError as e:
-                log.warning("your lab: %s", e)
+            except (httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+                log.warning("your lab: %s: %s", type(e).__name__, e)
+                return
+
+    async def own_lab(client: httpx.AsyncClient, rng: random.Random) -> dict | None:
+        """How the owner's lab works, from its own docs. The pool is topped up in the background, a few
+        sections ahead, so a feed load waits for the model only when the pool is empty (the first time)."""
+        if not settings.curator_enabled:
+            return None
+        running = lab_task[0] is not None and not lab_task[0].done()
+        if not running and store.pool_size(mylab.POOL) < LAB_POOL_LOW:
+            lab_task[0] = asyncio.create_task(_lab_top_up(client, random.Random(), LAB_TOP_UP))
+        pick = store.take(mylab.POOL, rng.random())
+        if not pick and lab_task[0] is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(lab_task[0]), LAB_FIRST_WAIT)
+            except asyncio.TimeoutError:
+                pass
             pick = store.take(mylab.POOL, rng.random())
         return pick["card"] if pick else None
 
@@ -844,6 +863,8 @@ def create_app(
         avail = {k: v and k in mine for k, v in sources.configured(settings).items()}
         if kinds:
             wanted = {k.strip() for k in kinds.split(",")}
+            if "homelab" in wanted:
+                wanted.add("mylab")  # the Home lab chip covers your own lab too
             avail = {k: v and k in wanted for k, v in avail.items()}
         weights = engagement_weights(weights_for(user), store.engagement(user))
         plan = pick_kinds(weights, avail, n, rng)
