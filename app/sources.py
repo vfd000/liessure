@@ -928,6 +928,7 @@ async def language(client: httpx.AsyncClient, s: Settings, rng: random.Random) -
                 subtitle="Your spaced-repetition queue",
                 blurb="Clear whatever is due. It's shorter than a front page.",
                 url=s.language_practice_url,
+                ref=f"drill:{code or lang}",  # one per language: they share the practice URL
             )
         options += [drill, drill]  # the drill is the best use of the minute; weight it
 
@@ -1156,7 +1157,7 @@ async def trivia_card(client: httpx.AsyncClient, s: Settings, rng: random.Random
 
 async def geoquiz_card(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
     from . import geoquiz  # late import: geoquiz imports this module
-    return await geoquiz.card(client, "es" if s.reply_lang == "Spanish" else "en", rng)
+    return await geoquiz.card(client, "es" if s.reply_lang == "Spanish" else "en", rng, s.data_dir)
 
 
 async def kquiz_card(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:

@@ -11,7 +11,9 @@ the United States), the capital of a country with more than one, and the contine
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import random
 import time
 from typing import Any
@@ -43,7 +45,9 @@ WHERE {
 GROUP BY ?c
 """
 TTL = 7 * 24 * 3600
+RETRY_AFTER = 15 * 60  # after a failed fetch: Wikidata's query service rate-limits hard when it's struggling
 LANGS = ("es", "en")
+FILE = "geo-countries.json"
 
 TEXT = {
     "es": {
@@ -80,6 +84,8 @@ TEXT = {
 
 _countries: list[dict[str, Any]] = []
 _fetched = 0.0
+_failed = 0.0
+_loaded = False
 _task: asyncio.Task | None = None
 
 
@@ -110,21 +116,54 @@ def parse(bindings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-async def _fetch(client: httpx.AsyncClient) -> None:
-    global _countries, _fetched
-    r = await client.get("https://query.wikidata.org/sparql", params={"query": QUERY, "format": "json"},
-                         headers={"Accept": "application/sparql-results+json"}, timeout=60)
-    r.raise_for_status()
-    found = parse(r.json()["results"]["bindings"])
-    if len(found) >= 100:
-        _countries, _fetched = found, time.time()
+def _load(data_dir: str) -> None:
+    """The last list fetched, from the data volume: a restart or a Wikidata outage doesn't empty the quiz."""
+    global _countries, _fetched, _loaded
+    _loaded = True
+    if not data_dir:
+        return
+    try:
+        with open(os.path.join(data_dir, FILE), encoding="utf-8") as f:
+            saved = json.load(f)
+        if len(saved.get("countries") or []) >= 100:
+            _countries, _fetched = saved["countries"], float(saved.get("fetched") or 0)
+    except (OSError, ValueError, AttributeError):
+        pass
 
 
-async def countries(client: httpx.AsyncClient) -> list[dict[str, Any]]:
-    """The list, refreshed weekly in the background; the first time it waits a little for it."""
+async def _fetch(client: httpx.AsyncClient, data_dir: str) -> None:
+    global _countries, _fetched, _failed
+    try:
+        r = await client.get("https://query.wikidata.org/sparql", params={"query": QUERY, "format": "json"},
+                             headers={"Accept": "application/sparql-results+json"}, timeout=60)
+        r.raise_for_status()
+        found = parse(r.json()["results"]["bindings"])
+    except (httpx.HTTPError, ValueError, KeyError):
+        _failed = time.time()
+        raise
+    if len(found) < 100:
+        _failed = time.time()
+        return
+    _countries, _fetched = found, time.time()
+    if data_dir:
+        tmp = os.path.join(data_dir, FILE + ".tmp")
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"fetched": _fetched, "countries": found}, f, ensure_ascii=False)
+            os.replace(tmp, os.path.join(data_dir, FILE))
+        except OSError as e:
+            log.warning("couldn't save the countries: %s", e)
+
+
+async def countries(client: httpx.AsyncClient, data_dir: str = "") -> list[dict[str, Any]]:
+    """The list, refreshed weekly in the background (and kept on the data volume); the first time it waits
+    a little for it. After a failed fetch it waits RETRY_AFTER before asking Wikidata again."""
     global _task
-    if (not _countries or time.time() - _fetched > TTL) and (_task is None or _task.done()):
-        _task = asyncio.create_task(_fetch(client))
+    if not _loaded:
+        _load(data_dir)
+    stale = not _countries or time.time() - _fetched > TTL
+    if stale and time.time() - _failed > RETRY_AFTER and (_task is None or _task.done()):
+        _task = asyncio.create_task(_fetch(client, data_dir))
     if not _countries and _task is not None:
         try:
             await asyncio.wait_for(asyncio.shield(_task), 8)
@@ -162,7 +201,7 @@ def card_for(everyone: list[dict[str, Any]], lang: str, rng: random.Random) -> C
     if kind == "flag" and not c["flag"]:
         kind = "people"
     name, capital, continent = c["name"][lang], c["capital"][lang], c["continent"][lang]
-    image, right = "", ""
+    image, right, trio_ref = "", "", ""
     if kind in ("capital", "capital_of", "flag"):
         pool = [x for x in everyone if x["one_capital"] or kind == "flag"]
         others = _others(pool, c, rng, 3)
@@ -196,6 +235,7 @@ def card_for(everyone: list[dict[str, Any]], lang: str, rng: random.Random) -> C
                             for x in sorted(trio, key=lambda x: -x[field]))
         title = t[kind]
         choices, right, c = [x["name"][lang] for x in trio], best["name"][lang], best
+        trio_ref = "+".join(sorted(x["qid"] for x in trio))
         solution = t["is_" + kind].format(country=right, list=listing)
     choices = list(dict.fromkeys(choices))
     rng.shuffle(choices)
@@ -204,9 +244,9 @@ def card_for(everyone: list[dict[str, Any]], lang: str, rng: random.Random) -> C
         url=f"https://{lang}.m.wikipedia.org/wiki/{quote(c['name'][lang].replace(' ', '_'))}",
         open_label=t["open"],
         quiz={"choices": choices, "answer": choices.index(right), "solution": solution},
-        ref=f"geoquiz:{c['qid']}:{kind}",
+        ref=f"geoquiz:{c['qid']}:{kind}" + (f":{trio_ref}" if kind in ("bigger", "people") else ""),
     )
 
 
-async def card(client: httpx.AsyncClient, lang: str, rng: random.Random) -> Card:
-    return card_for(await countries(client), lang, rng)
+async def card(client: httpx.AsyncClient, lang: str, rng: random.Random, data_dir: str = "") -> Card:
+    return card_for(await countries(client, data_dir), lang, rng)

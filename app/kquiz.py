@@ -33,9 +33,11 @@ SELECT ?p ?name ?ko ?img ?dob ?gender WHERE {
 LIMIT 1500
 """
 TTL = 24 * 3600
+RETRY_AFTER = 15 * 60  # after a failed fetch (Wikidata's query service rate-limits hard when it's struggling)
 
 _people: list[dict[str, Any]] = []
 _fetched = 0.0
+_failed = 0.0
 _task: asyncio.Task | None = None
 
 TEXT = {
@@ -47,6 +49,15 @@ TEXT = {
 
 
 async def _fetch(client: httpx.AsyncClient) -> None:
+    global _failed
+    try:
+        await _fetch_people(client)
+    except (httpx.HTTPError, ValueError, KeyError):
+        _failed = time.time()
+        raise
+
+
+async def _fetch_people(client: httpx.AsyncClient) -> None:
     global _people, _fetched
     r = await client.get("https://query.wikidata.org/sparql", params={"query": QUERY, "format": "json"},
                          headers={"Accept": "application/sparql-results+json"}, timeout=30)
@@ -68,7 +79,8 @@ async def _fetch(client: httpx.AsyncClient) -> None:
 async def people(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     """The list, refreshed daily in the background; the first time it waits a little for it."""
     global _task
-    if (not _people or time.time() - _fetched > TTL) and (_task is None or _task.done()):
+    if ((not _people or time.time() - _fetched > TTL) and time.time() - _failed > RETRY_AFTER
+            and (_task is None or _task.done())):
         _task = asyncio.create_task(_fetch(client))
     if not _people and _task is not None:
         try:

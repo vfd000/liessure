@@ -53,9 +53,35 @@ const UI = {
     "a word, e.g. golf": "una palabra, p. ej. golf", "Just this card": "Solo esta tarjeta",
     "Hidden topics: ": "Temas ocultos: ", "sports": "deportes", "alcohol": "alcohol",
     "animal products": "productos animales",
+    // Card labels and buttons the server writes in English (tl() translates each " · " part).
+    "Movie on Jellyfin": "Película en Jellyfin", "Series on Jellyfin": "Serie en Jellyfin",
+    "Episode on Jellyfin": "Episodio en Jellyfin", "Next up on Jellyfin": "Lo siguiente en Jellyfin",
+    "Song": "Canción", "Photo in Immich": "Foto en Immich", "Memory in Immich": "Recuerdo en Immich",
+    "On this day": "Un día como hoy", "Video": "Vídeo", "Nebula": "Nebula", "Wikipedia": "Wikipedia",
+    "Game on RomM": "Juego en RomM", "solar": "energía solar", "weather": "el tiempo",
+    "puzzle": "acertijo", "combinatorics": "combinatoria", "algebra": "álgebra", "fractions": "fracciones",
+    "geometry": "geometría", "mental arithmetic": "cálculo mental", "number theory": "teoría de números",
+    "percentages": "porcentajes", "probability": "probabilidad", "sequences": "sucesiones",
+    "Play in Symfonium": "Reproducir en Symfonium", "Album": "Álbum", "Tutor me": "Explícamelo paso a paso",
+    "Watch the trailer": "Ver el tráiler", "Watch a lesson here": "Ver una lección aquí", "Hear it": "Escuchar",
+    "More info": "Más información", "Open link": "Abrir enlace", "Search": "Buscar", "Original": "Original",
+    "Play in browser": "Jugar en el navegador", "Play in Argosy": "Jugar en Argosy",
+    "Taken": "Tomada", "Where": "Dónde", "Coordinates": "Coordenadas", "Camera": "Cámara", "Lens": "Objetivo",
+    "Exposure": "Exposición", "Size": "Tamaño", "Map": "Mapa", "What's nearby": "Qué hay cerca",
+    "Description": "Descripción", "Details": "Detalles", "Geography": "Geografía", "Jeopardy!": "Jeopardy!",
   },
 };
 const t = (s) => (UI[UI_LANG] && UI[UI_LANG][s]) || s;
+// A label the server wrote in English ("Math · puzzle", "On this day, 2 years ago · Kyoto"), part by part.
+const AGO = { es: (n) => `Un día como hoy, hace ${n} año${n === "1" ? "" : "s"}` };
+function tl(s) {
+  if (!s || !UI[UI_LANG]) return s;
+  return String(s).split(" · ").map((part) => {
+    const ago = /^On this day, (\d+) years? ago$/.exec(part);
+    if (ago && AGO[UI_LANG]) return AGO[UI_LANG](ago[1]);
+    return t(part);
+  }).join(" · ");
+}
 const feed = document.getElementById("feed");
 const sentinel = document.getElementById("sentinel");
 const chips = document.getElementById("chips");
@@ -180,13 +206,13 @@ function renderCard(c) {
   nope.title = nope.ariaLabel = t("Not interested");
   nope.onclick = () => notInterested(c, card);
   body.append(nope);
-  body.append(el("div", "label", c.label));
+  body.append(el("div", "label", tl(c.label)));
   // A photo's date, written out in the reader's language, where it's seen without opening details.
   const taken = c.photo && c.photo.when ? photoDate(c.photo.when) : "";
   const untitled = taken && c.title === c.photo.when; // no place: the title was the bare date
   body.append(el("h2", "title", untitled ? taken : c.title));
   if (taken && !untitled) body.append(el("div", "photo-date", "📅 " + taken));
-  if (c.subtitle) body.append(el("div", "subtitle", c.subtitle));
+  if (c.subtitle) body.append(el("div", "subtitle", c.kind === "photo" ? tl(c.subtitle) : c.subtitle));
   if (c.why) body.append(el("p", "why", c.why));
   if (c.blurb) {
     const p = el("p", "blurb clamp", c.blurb);
@@ -251,12 +277,12 @@ function renderCard(c) {
       const dl = el("dl");
       for (const d of c.details) {
         if (d.url) continue;
-        dl.append(el("dt", "", d.label), el("dd", "", d.value));
+        dl.append(el("dt", "", tl(d.label)), el("dd", "", d.value));
       }
       more.append(dl);
       const links = el("div", "actions");
       for (const d of c.details.filter((x) => x.url)) {
-        const l = el("a", "", d.label);
+        const l = el("a", "", tl(d.label));
         l.href = d.url;
         l.onclick = (e) => { e.preventDefault(); openUrl(d.url); };
         links.append(l);
@@ -291,7 +317,7 @@ function renderCard(c) {
     body.append(more);
   }
   if (c.embed && c.embed.src) {
-    const play = el("button", "primary", "▶ " + (c.embed.label || t("Play here")));
+    const play = el("button", "primary", "▶ " + (tl(c.embed.label) || t("Play here")));
     play.onclick = () => { playInline(card, c.embed); play.remove(); report(c, "play"); };
     actions.append(play);
   }
@@ -369,7 +395,7 @@ function renderCard(c) {
     actions.append(mk);
   }
   if (c.url) {
-    const go = el("a", (c.embed && c.embed.src) || c.quiz ? "" : "primary", c.open_label || t("Open"));
+    const go = el("a", (c.embed && c.embed.src) || c.quiz ? "" : "primary", tl(c.open_label) || t("Open"));
     go.href = c.url;
     go.target = "_blank";
     go.rel = "noopener";
@@ -382,14 +408,14 @@ function renderCard(c) {
   }
   for (const a of c.actions || []) {
     if (a.speak) {
-      const b = el("button", "", a.label);
+      const b = el("button", "", tl(a.label));
       b.onclick = () => speak(a.speak);
       actions.append(b);
       continue;
     }
     if (a.app) {
       if (!android) continue; // app launch only makes sense on the phone
-      const b = el("button", "", a.label);
+      const b = el("button", "", tl(a.label));
       b.onclick = () => {
         if (a.song && android.playSong) {
           android.playSong(a.app, a.song.title || "", a.song.artist || "", a.song.album || "");
@@ -399,7 +425,7 @@ function renderCard(c) {
       actions.append(b);
     } else if (a.url) {
       if (a.android && !android) continue; // e.g. argosy:// only means something on the phone
-      const l = el("a", "", a.label);
+      const l = el("a", "", tl(a.label));
       l.href = a.url;
       l.onclick = (e) => {
         e.preventDefault();

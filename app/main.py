@@ -553,7 +553,7 @@ def create_app(
                 # A country, in their language: its Wikipedia article is the source of the next few bites.
                 try:
                     lang = "es" if s.reply_lang == "Spanish" else "en"
-                    country = rng.choice(await geoquiz.countries(client))["name"][lang]
+                    country = rng.choice(await geoquiz.countries(client, settings.data_dir))["name"][lang]
                     s = dataclasses.replace(s, wiki_interests=[country])
                 except sources.Unavailable as e:
                     log.info("geo bites: %s", e)

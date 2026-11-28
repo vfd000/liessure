@@ -284,7 +284,9 @@ def full_settings(**kw) -> Settings:
 @pytest.fixture(autouse=True)
 def clear_caches():
     from app import geoquiz
-    geoquiz._countries, geoquiz._fetched, geoquiz._task = [], 0.0, None
+    from app import kquiz
+    geoquiz._countries, geoquiz._fetched, geoquiz._task, geoquiz._failed, geoquiz._loaded = [], 0.0, None, 0.0, False
+    kquiz._failed = 0.0
     for c in (sources._news_cache, sources._nebula_cache, sources._inv_cache, sources._romm_total,
               sources._homelab_cache, sources._jobs_cache, sources._gaps_cache,
               sources._telemetry_cache, sources._home_cache, sources._stats_cache, sources._todo_cache,
@@ -2215,3 +2217,137 @@ def test_photo_date_has_its_own_line_not_the_subtitle():
     assert plain.photo["when"] == "2024-05-01" and "2024" not in plain.subtitle
     memory = sources._immich_card(full_settings(), asset, "On this day, 2 years ago")
     assert memory.subtitle == "On this day, 2 years ago · Kyoto, Japan"
+
+
+def test_geography_quiz_answers_come_from_wikidata_in_the_readers_language():
+    from app import geoquiz
+    everyone = geoquiz.parse(json.loads(GEO_JSON)["results"]["bindings"])
+    assert len(everyone) == 120 and everyone[3]["area"] == pytest.approx((1e9 * 27 + 3) / 1e6)
+    kinds = set()
+    for seed in range(300):
+        c = geoquiz.card_for(everyone, "es", random.Random(seed))
+        q, kind = c.quiz, c.ref.split(":")[2]
+        kinds.add(kind)
+        assert c.label == "Geografía · quiz" and c.title.startswith("¿") and len(set(q["choices"])) == len(q["choices"]) >= 3
+        right = q["choices"][q["answer"]]
+        qid = c.ref.split(":")[1]
+        country = next(x for x in everyone if x["qid"] == qid)
+        if kind == "capital":
+            assert right == country["capital"]["es"] and country["name"]["es"] in c.title and country["one_capital"]
+        elif kind in ("capital_of", "flag"):
+            assert right == country["name"]["es"]
+        elif kind == "continent":
+            assert right == country["continent"]["es"]
+        else:  # bigger / people: the right answer really is the largest of the three
+            field = "area" if kind == "bigger" else "population"
+            assert country[field] == max(x[field] for x in everyone if x["name"]["es"] in q["choices"])
+        assert "es.m.wikipedia.org" in c.url
+    assert kinds == {"capital", "capital_of", "flag", "continent", "bigger", "people"}
+    assert geoquiz.card_for(everyone, "en", random.Random(1)).label == "Geography quiz"
+
+
+def _spanish_reader_app(monkeypatch, translate=True, prefs=None):
+    who = [DANI]
+    asked = []
+
+    async def ask(client, s, prompt, system=""):
+        asked.append(prompt)
+        if prompt.startswith("Translate into Spanish:"):
+            if not translate:
+                raise httpx.ConnectError("down")
+            texts = json.loads(prompt.split("\n", 1)[1])
+            return json.dumps({k: "ES " + v for k, v in texts.items()})
+        return "{}"
+
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    p = {"lang": "es", "lang_name": "Spanish", **(prefs or {})}
+    app = create_app(sso_settings(llm_url="http://llm.test", llm_key="k", user_prefs={DANI: p}),
+                     transport=httpx.MockTransport(sso_backend(who)), store=Store(":memory:"), run_curator=False)
+    return app, who, asked
+
+
+def test_math_and_home_cards_are_translated_for_a_spanish_reader(monkeypatch):
+    app, who, asked = _spanish_reader_app(monkeypatch)
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        m = d.get("/api/card/math").json()
+        assert m["title"].startswith("ES ") and m["quiz"]["hint"].startswith("ES ") and m["quiz"]["solution"].startswith("ES ")
+        assert not m["quiz"]["answer"].startswith("ES")  # the answer the page checks is left alone
+        h = d.get("/api/card/home").json()
+        assert h["title"].startswith("ES ") and (not h.get("blurb") or h["blurb"].startswith("ES "))
+        for _ in range(4):
+            d.get("/api/card/home")
+        translated = [p for p in asked if p.startswith("Translate")]
+        assert len(translated) == len(set(translated))  # the same text isn't translated twice
+
+
+def test_untranslatable_math_is_skipped_not_shown_in_english(monkeypatch):
+    app, who, _ = _spanish_reader_app(monkeypatch, translate=False)
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        assert d.get("/api/card/math").status_code == 503
+        mv = d.get("/api/card/movie")
+        assert mv.status_code == 200 and not mv.json()["blurb"].startswith("ES")  # a synopsis stays as it is
+
+
+def test_english_readers_get_no_translation(monkeypatch):
+    app, who, asked = _spanish_reader_app(monkeypatch)
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        assert not a.get("/api/card/math").json()["title"].startswith("ES")
+        assert not [p for p in asked if p.startswith("Translate")]
+
+
+def test_a_readers_own_weights_and_geography_bites(monkeypatch):
+    app, who, asked = _spanish_reader_app(monkeypatch, prefs={
+        "weights": {"math": 0, "geoquiz": 9}, "geo_bites": True, "kinds_off": ["trivia"]})
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        kinds = [c["kind"] for _ in range(6) for c in d.get("/api/feed?n=8").json()["cards"]]
+        assert "math" not in kinds and "trivia" not in kinds and kinds.count("geoquiz") >= 4
+        eng = d.get("/api/engagement").json()
+        assert eng is not None
+        random.seed(3)
+        for _ in range(8):
+            d.get("/api/card/bite")
+        searched = [p for p in asked if "Write 3 or 4 cards" in p]
+        assert searched, "geo bites asked the curator for cards"
+
+
+def test_geography_countries_survive_a_restart_and_a_wikidata_outage(tmp_path):
+    from app import geoquiz
+    calls = []
+
+    def ok(request):
+        calls.append(1)
+        return httpx.Response(200, text=GEO_JSON)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(ok)) as c:
+            return await geoquiz.countries(c, str(tmp_path))
+    assert len(asyncio.run(run())) == 120 and (tmp_path / geoquiz.FILE).exists()
+
+    # A restart while Wikidata answers 429: the saved list is used, and it isn't asked again for a while.
+    geoquiz._countries, geoquiz._fetched, geoquiz._task, geoquiz._loaded = [], 0.0, None, False
+    def limited(request):
+        calls.append(1)
+        return httpx.Response(429, text="Aggressively rate-limiting")
+
+    async def run2():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(limited)) as c:
+            got = await geoquiz.countries(c, str(tmp_path))
+            await asyncio.sleep(0)
+            return got
+    assert len(asyncio.run(run2())) == 120
+    # Nothing saved and Wikidata down: unavailable, and the next card doesn't ask Wikidata again.
+    geoquiz._countries, geoquiz._fetched, geoquiz._task, geoquiz._loaded, geoquiz._failed = [], 0.0, None, False, 0.0
+    (tmp_path / geoquiz.FILE).unlink()
+    n = len(calls)
+
+    async def run3():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(limited)) as c:
+            for _ in range(5):
+                with pytest.raises(sources.Unavailable):
+                    await geoquiz.countries(c, str(tmp_path))
+    asyncio.run(run3())
+    assert len(calls) == n + 1
