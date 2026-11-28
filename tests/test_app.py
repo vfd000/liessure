@@ -445,7 +445,7 @@ def test_unconfigured_sources_are_skipped():
         s = c.get("/api/sources").json()["sources"]
         assert s["wikipedia"]["configured"] and not s["movie"]["configured"]
         cards = c.get("/api/feed?n=6").json()["cards"]
-        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language", "homelab", "math", "infosec", "exercise", "trivia"}
+        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language", "homelab", "math", "infosec", "exercise", "trivia", "geoquiz"}
 
 
 def test_weights_and_pick():
@@ -2207,3 +2207,11 @@ def test_related_video_links_and_list_headers_are_dropped():
     ) == "Nagasaki has the best trams."
     assert sources.clean_video_description(html_desc) == (
         "Punggol was planned as a town where you would not need a car.")
+
+def test_photo_date_has_its_own_line_not_the_subtitle():
+    """The page writes the date out from photo.when, so the subtitle doesn't repeat it as 2024-05-01."""
+    asset = {"id": "p9", "localDateTime": "2024-05-01T10:00:00", "exifInfo": {"city": "Kyoto", "country": "Japan"}}
+    plain = sources._immich_card(full_settings(), asset, "")
+    assert plain.photo["when"] == "2024-05-01" and "2024" not in plain.subtitle
+    memory = sources._immich_card(full_settings(), asset, "On this day, 2 years ago")
+    assert memory.subtitle == "On this day, 2 years ago · Kyoto, Japan"

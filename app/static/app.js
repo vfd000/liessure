@@ -137,6 +137,30 @@ function retryImage(img, src) {
   img.src = src;
 }
 
+// "2024-05-03" -> "Friday, May 3, 2024 · 2 years ago" (or "viernes, 3 de mayo de 2024 · hace 2 años").
+function photoDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || "");
+  if (!m) return "";
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  let out;
+  try {
+    out = d.toLocaleDateString(UI_LANG, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  } catch { out = iso.slice(0, 10); }
+  const now = new Date();
+  let years = now.getFullYear() - d.getFullYear();
+  if (now.getMonth() < d.getMonth() || (now.getMonth() === d.getMonth() && now.getDate() < d.getDate())) years--;
+  try {
+    const rel = new Intl.RelativeTimeFormat(UI_LANG, { numeric: "auto" });
+    if (years >= 1) out += " · " + rel.format(-years, "year");
+    else {
+      const days = Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - d) / 86400000);
+      if (days >= 0 && days < 60) out += " · " + rel.format(-days, "day");
+      else if (days >= 60) out += " · " + rel.format(-Math.floor(days / 30), "month");
+    }
+  } catch { /* no relative time in this browser: the date alone */ }
+  return out;
+}
+
 function renderCard(c) {
   const card = el("article", "card " + c.kind);
   card.card = c; // podcast mode finds the readable cards on the page
@@ -157,7 +181,11 @@ function renderCard(c) {
   nope.onclick = () => notInterested(c, card);
   body.append(nope);
   body.append(el("div", "label", c.label));
-  body.append(el("h2", "title", c.title));
+  // A photo's date, written out in the reader's language, where it's seen without opening details.
+  const taken = c.photo && c.photo.when ? photoDate(c.photo.when) : "";
+  const untitled = taken && c.title === c.photo.when; // no place: the title was the bare date
+  body.append(el("h2", "title", untitled ? taken : c.title));
+  if (taken && !untitled) body.append(el("div", "photo-date", "📅 " + taken));
   if (c.subtitle) body.append(el("div", "subtitle", c.subtitle));
   if (c.why) body.append(el("p", "why", c.why));
   if (c.blurb) {

@@ -485,12 +485,13 @@ def _immich_card(s: Settings, asset: dict[str, Any], subtitle: str) -> Card:
     exif = asset.get("exifInfo") or {}
     place = ", ".join(x for x in (exif.get("city"), exif.get("state"), exif.get("country")) if x)
     when = (asset.get("localDateTime") or asset.get("fileCreatedAt") or "")[:10]
-    parts = [p for p in (subtitle, when, place) if p]
+    # The date has its own line on the card (from photo.when); the subtitle keeps what else there is.
+    parts = [p for p in (subtitle, place if subtitle else "") if p]
     return Card(
         kind="photo",
         label="Photo in Immich",
         title=place or when or "A photo",
-        subtitle=" · ".join(parts[1:] if not subtitle else parts),
+        subtitle=" · ".join(parts),
         blurb=_clip(exif.get("description")),
         image=proxied(f"{s.immich.url}/api/assets/{asset['id']}/thumbnail?size=preview"),
         url=f"{s.immich.link_base}/photos/{asset['id']}",
