@@ -36,6 +36,21 @@ NEBULA = """<?xml version="1.0"?><rss version="2.0"><channel><title>Nebula</titl
 <description>Buoyancy.</description><author>Real Engineering</author></item></channel></rss>"""
 
 
+def _geo_binding(n: int) -> dict:
+    """A made-up country for the geography quiz: names in both languages, on one of six continents."""
+    conts = [("África", "Africa"), ("Asia", "Asia"), ("Europa", "Europe"), ("América del Sur", "South America"),
+             ("América del Norte", "North America"), ("Oceanía", "Oceania")]
+    ces, cen = conts[n % 6]
+    v = lambda x: {"value": str(x)}
+    return {"c": v(f"http://www.wikidata.org/entity/Q{9000 + n}"), "nameEs": v(f"País {n}"), "nameEn": v(f"Country {n}"),
+            "capitalEs": v(f"Capital {n} (es)"), "capitalEn": v(f"Capital {n}"), "caps": v(2 if n == 7 else 1),
+            "continentEs": v(ces), "continentEn": v(cen), "conts": v(1), "population": v(1000 * 2 ** (n % 30) + n),
+            "areaM2": v(1e9 * 3 ** (n % 20) + n), "flagImg": v(f"http://commons.wikimedia.org/wiki/Special:FilePath/Flag{n}.svg")}
+
+
+GEO_JSON = json.dumps({"results": {"bindings": [_geo_binding(n) for n in range(120)]}})
+
+
 async def _agen(data):
     yield data
 
@@ -134,6 +149,8 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
     if host == "phrack.org" and path == "/issues/73/word-machines-for-weird-machines.html":
         return httpx.Response(200, text=PHRACK_TEXT)
     if host == "query.wikidata.org" and path == "/sparql":
+        if "Q3624078" in request.url.params.get("query", ""):
+            return httpx.Response(200, text=GEO_JSON)
         return httpx.Response(200, text=KQUIZ_JSON)
     if host == "phrack.org" and path == "/index_latest.html":
         return httpx.Response(200, text=PHRACK_HTML)
@@ -266,6 +283,10 @@ def full_settings(**kw) -> Settings:
 
 @pytest.fixture(autouse=True)
 def clear_caches():
+    from app import geoquiz
+    from app import kquiz
+    geoquiz._countries, geoquiz._fetched, geoquiz._task, geoquiz._failed, geoquiz._loaded = [], 0.0, None, 0.0, False
+    kquiz._failed = 0.0
     for c in (sources._news_cache, sources._nebula_cache, sources._inv_cache, sources._romm_total,
               sources._homelab_cache, sources._jobs_cache, sources._gaps_cache,
               sources._telemetry_cache, sources._home_cache, sources._stats_cache, sources._todo_cache,
@@ -286,7 +307,7 @@ def client():
 
 def test_every_kind_produces_a_card(client):
     for kind in sources.SOURCES:
-        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia", "session", "exercise", "recommend"):
+        if kind in ("recall", "todo", "bite", "lesson", "career", "kquiz", "flashcard", "trivia", "session", "exercise", "recommend", "mylab"):
             continue  # need the LLM: test_recall_questions_..., test_todo_card_endpoint
         r = client.get(f"/api/card/{kind}")
         assert r.status_code == 200, (kind, r.text)
@@ -426,7 +447,7 @@ def test_unconfigured_sources_are_skipped():
         s = c.get("/api/sources").json()["sources"]
         assert s["wikipedia"]["configured"] and not s["movie"]["configured"]
         cards = c.get("/api/feed?n=6").json()["cards"]
-        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language", "homelab", "math", "infosec", "exercise", "trivia"}
+        assert cards and {x["kind"] for x in cards} <= {"wikipedia", "language", "homelab", "math", "infosec", "exercise", "trivia", "geoquiz"}
 
 
 def test_weights_and_pick():
@@ -1474,6 +1495,9 @@ def test_a_spanish_reader_gets_spanish_help_and_no_wikipedia_walls(monkeypatch):
     seen = {}
 
     async def ask(client, s, prompt, system=None):
+        if prompt.startswith("Translate into Spanish:"):  # the math card itself, translated
+            texts = json.loads(prompt.split("\n", 1)[1])
+            return json.dumps({k: "ES " + v for k, v in texts.items()})
         seen["system"] = system
         return "1. Restaste en vez de sumar."
     monkeypatch.setattr(curator, "ask_llm", ask)
@@ -2104,3 +2128,284 @@ def test_a_reader_has_their_own_nebula_channels_and_share():
         sign_in(a, who, AXL)
         for _ in range(5):  # his share is 0: Invidious only, and Dani's cached feed isn't his
             assert a.get("/api/card/video").json()["label"] != "Nebula"
+
+
+WENDOVER_DESC = ('<p><p>Instagram: <a href="http://Instagram.com/sam.from.wendover">http://Instagram.com/sam.from.wendover</a></p>\n'
+                 '<p>Twitter: <a href="http://www.Twitter.com/WendoverPro">http://www.Twitter.com/WendoverPro</a></p>\n'
+                 '<p>Sponsorship Enquiries: wendover@standard.tv</p>\n<p>Other emails: sam@wendover.productions</p>\n'
+                 '<p>Writing by Sam Denby</p>\n<p>Editing by Alexander Williard</p>\n'
+                 '<p>Animation by Sara Stoltman, Gabriel Ferreras, and Kate Ermolenkko</p>\n<p>Thumbnail by Simon Buckmaster</p></p>')
+NEBULA_SPIRIT = ('<?xml version="1.0"?><rss version="2.0"><channel><title>Wendover</title>'
+                 '<item><title>Why Spirit Airlines Failed</title><link>https://nebula.tv/videos/wendover-why-spirit-airlines-failed/</link>'
+                 '<description><![CDATA[' + WENDOVER_DESC + ']]></description><author>Wendover</author></item></channel></rss>')
+
+
+def test_video_description_plugs_and_credits_are_dropped():
+    item = sources.parse_feed(NEBULA_SPIRIT.encode())[0]
+    assert sources.clean_video_description(item["summary"]) == ""
+    assert sources.nebula_card(item).blurb == ""
+    kept = sources.clean_video_description(
+        "Sam and Ben race across Japan.\nPatreon: patreon.com/jetlag\nThis season was filmed in March.")
+    assert kept == "Sam and Ben race across Japan. This season was filmed in March."
+
+
+def _spirit_app(monkeypatch, reply):
+    who = [AXL]
+    base = sso_backend(who)
+
+    def handler(request):
+        if request.url.host == "news.test" and request.url.path == "/spirit":
+            return httpx.Response(200, content=NEBULA_SPIRIT.encode())
+        return base(request)
+
+    prompts = []
+
+    async def ask(client, s, prompt, system=""):
+        prompts.append((prompt, system))
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    s = sso_settings(llm_url="http://llm.test", llm_key="k", invidious=Service(), nebula_feeds=["http://news.test/spirit"],
+                     user_prefs={DANI: {"lang": "es", "lang_name": "Spanish"}})
+    app = create_app(s, transport=httpx.MockTransport(handler), store=Store(":memory:"), run_curator=False)
+    return app, who, prompts
+
+
+def test_nebula_cards_get_an_llm_description_in_the_readers_language(monkeypatch):
+    app, who, prompts = _spirit_app(monkeypatch, '{"description": "Wendover explica por qué fracasó Spirit Airlines."}')
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        v = d.get("/api/card/video").json()
+        assert v["blurb"] == "Wendover explica por qué fracasó Spirit Airlines."
+        assert "Instagram" not in v["blurb"]
+        prompt, system = prompts[0]
+        assert "Write the description in Spanish." in prompt and "Description: (none)" in prompt
+        assert "never add facts" in system
+        d.get("/api/card/video")
+        assert len(prompts) == 1  # kept, not asked again
+
+
+def test_nebula_card_keeps_the_cleaned_text_when_the_llm_fails(monkeypatch):
+    app, who, prompts = _spirit_app(monkeypatch, httpx.ConnectError("down"))
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        v = a.get("/api/card/video").json()
+        assert v["title"] == "Why Spirit Airlines Failed" and v["blurb"] == ""
+    app, who, prompts = _spirit_app(monkeypatch, '{"description": "See http://instagram.com/x"}')
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        assert a.get("/api/card/video").json()["blurb"] == ""  # a link from the model isn't kept either
+
+
+def test_related_video_links_and_list_headers_are_dropped():
+    html_desc = ('<p>Watch my public transit travel show "Day Pass" on Nebula: <a href="https://nebula.tv/daypass">Day Pass</a></p>'
+                 '<p>Punggol was planned as a town where you would not need a car.</p>'
+                 '<p>Related Videos</p><p><a href="https://nebula.tv/videos/x">Is Singapore a car paradise?</a></p>'
+                 '<p>Cycling Made Difficult</p>')
+    assert sources.clean_video_description(
+        "Nagasaki has the best trams.\nRelevant Videos\nThe International City of Streetcars\nCycling Made Difficult"
+    ) == "Nagasaki has the best trams."
+    assert sources.clean_video_description(html_desc) == (
+        "Punggol was planned as a town where you would not need a car.")
+
+def test_photo_date_has_its_own_line_not_the_subtitle():
+    """The page writes the date out from photo.when, so the subtitle doesn't repeat it as 2024-05-01."""
+    asset = {"id": "p9", "localDateTime": "2024-05-01T10:00:00", "exifInfo": {"city": "Kyoto", "country": "Japan"}}
+    plain = sources._immich_card(full_settings(), asset, "")
+    assert plain.photo["when"] == "2024-05-01" and "2024" not in plain.subtitle
+    memory = sources._immich_card(full_settings(), asset, "On this day, 2 years ago")
+    assert memory.subtitle == "On this day, 2 years ago · Kyoto, Japan"
+
+
+def test_geography_quiz_answers_come_from_wikidata_in_the_readers_language():
+    from app import geoquiz
+    everyone = geoquiz.parse(json.loads(GEO_JSON)["results"]["bindings"])
+    assert len(everyone) == 120 and everyone[3]["area"] == pytest.approx((1e9 * 27 + 3) / 1e6)
+    kinds = set()
+    for seed in range(300):
+        c = geoquiz.card_for(everyone, "es", random.Random(seed))
+        q, kind = c.quiz, c.ref.split(":")[2]
+        kinds.add(kind)
+        assert c.label == "Geografía · quiz" and c.title.startswith("¿") and len(set(q["choices"])) == len(q["choices"]) >= 3
+        right = q["choices"][q["answer"]]
+        qid = c.ref.split(":")[1]
+        country = next(x for x in everyone if x["qid"] == qid)
+        if kind == "capital":
+            assert right == country["capital"]["es"] and country["name"]["es"] in c.title and country["one_capital"]
+        elif kind in ("capital_of", "flag"):
+            assert right == country["name"]["es"]
+        elif kind == "continent":
+            assert right == country["continent"]["es"]
+        else:  # bigger / people: the right answer really is the largest of the three
+            field = "area" if kind == "bigger" else "population"
+            assert country[field] == max(x[field] for x in everyone if x["name"]["es"] in q["choices"])
+        assert "es.m.wikipedia.org" in c.url
+    assert kinds == {"capital", "capital_of", "flag", "continent", "bigger", "people"}
+    assert geoquiz.card_for(everyone, "en", random.Random(1)).label == "Geography quiz"
+
+
+def _spanish_reader_app(monkeypatch, translate=True, prefs=None):
+    who = [DANI]
+    asked = []
+
+    async def ask(client, s, prompt, system=""):
+        asked.append(prompt)
+        if prompt.startswith("Translate into Spanish:"):
+            if not translate:
+                raise httpx.ConnectError("down")
+            texts = json.loads(prompt.split("\n", 1)[1])
+            return json.dumps({k: "ES " + v for k, v in texts.items()})
+        return "{}"
+
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    p = {"lang": "es", "lang_name": "Spanish", **(prefs or {})}
+    app = create_app(sso_settings(llm_url="http://llm.test", llm_key="k", user_prefs={DANI: p}),
+                     transport=httpx.MockTransport(sso_backend(who)), store=Store(":memory:"), run_curator=False)
+    return app, who, asked
+
+
+def test_math_and_home_cards_are_translated_for_a_spanish_reader(monkeypatch):
+    app, who, asked = _spanish_reader_app(monkeypatch)
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        m = d.get("/api/card/math").json()
+        assert m["title"].startswith("ES ") and m["quiz"]["hint"].startswith("ES ") and m["quiz"]["solution"].startswith("ES ")
+        assert not m["quiz"]["answer"].startswith("ES")  # the answer the page checks is left alone
+        h = d.get("/api/card/home").json()
+        assert h["title"].startswith("ES ") and (not h.get("blurb") or h["blurb"].startswith("ES "))
+        for _ in range(4):
+            d.get("/api/card/home")
+        translated = [p for p in asked if p.startswith("Translate")]
+        assert len(translated) == len(set(translated))  # the same text isn't translated twice
+
+
+def test_untranslatable_math_is_skipped_not_shown_in_english(monkeypatch):
+    app, who, _ = _spanish_reader_app(monkeypatch, translate=False)
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        assert d.get("/api/card/math").status_code == 503
+        mv = d.get("/api/card/movie")
+        assert mv.status_code == 200 and not mv.json()["blurb"].startswith("ES")  # a synopsis stays as it is
+
+
+def test_english_readers_get_no_translation(monkeypatch):
+    app, who, asked = _spanish_reader_app(monkeypatch)
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        assert not a.get("/api/card/math").json()["title"].startswith("ES")
+        assert not [p for p in asked if p.startswith("Translate")]
+
+
+def test_a_readers_own_weights_and_geography_bites(monkeypatch):
+    app, who, asked = _spanish_reader_app(monkeypatch, prefs={
+        "weights": {"math": 0, "geoquiz": 9}, "geo_bites": True, "kinds_off": ["trivia"]})
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        kinds = [c["kind"] for _ in range(6) for c in d.get("/api/feed?n=8").json()["cards"]]
+        assert "math" not in kinds and "trivia" not in kinds and kinds.count("geoquiz") >= 4
+        eng = d.get("/api/engagement").json()
+        assert eng is not None
+        random.seed(3)
+        for _ in range(8):
+            d.get("/api/card/bite")
+        searched = [p for p in asked if "Write 3 or 4 cards" in p]
+        assert searched, "geo bites asked the curator for cards"
+
+
+def test_geography_countries_survive_a_restart_and_a_wikidata_outage(tmp_path):
+    from app import geoquiz
+    calls = []
+
+    def ok(request):
+        calls.append(1)
+        return httpx.Response(200, text=GEO_JSON)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(ok)) as c:
+            return await geoquiz.countries(c, str(tmp_path))
+    assert len(asyncio.run(run())) == 120 and (tmp_path / geoquiz.FILE).exists()
+
+    # A restart while Wikidata answers 429: the saved list is used, and it isn't asked again for a while.
+    geoquiz._countries, geoquiz._fetched, geoquiz._task, geoquiz._loaded = [], 0.0, None, False
+    def limited(request):
+        calls.append(1)
+        return httpx.Response(429, text="Aggressively rate-limiting")
+
+    async def run2():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(limited)) as c:
+            got = await geoquiz.countries(c, str(tmp_path))
+            await asyncio.sleep(0)
+            return got
+    assert len(asyncio.run(run2())) == 120
+    # Nothing saved and Wikidata down: unavailable, and the next card doesn't ask Wikidata again.
+    geoquiz._countries, geoquiz._fetched, geoquiz._task, geoquiz._loaded, geoquiz._failed = [], 0.0, None, False, 0.0
+    (tmp_path / geoquiz.FILE).unlink()
+    n = len(calls)
+
+    async def run3():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(limited)) as c:
+            for _ in range(5):
+                with pytest.raises(sources.Unavailable):
+                    await geoquiz.countries(c, str(tmp_path))
+    asyncio.run(run3())
+    assert len(calls) == n + 1
+
+
+LAB_DOC = """# Reverse proxy
+
+Intro that is short.
+
+## Failover when NPM is down
+
+""" + ("NPM (VM 152) fronts every *.liess.tv host. When it is down, the gatekeeper's LAN door still answers, "
+       "because you chose to keep a second door on CT 113 instead of a hot spare: a spare doubled the cert "
+       "renewals and the access lists drifted. api_key: abcdefghijklmnop1234 ") * 3 + """
+
+## Package list
+
+""" + "nginx, certbot, sqlite, and some other packages are installed here for completeness. " * 8
+
+
+def test_your_lab_cards_come_from_the_labs_own_docs(monkeypatch, tmp_path):
+    from app import mylab
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "npm.md").write_text(LAB_DOC)
+    (tmp_path / ".claude" / "skills" / "npm").mkdir(parents=True)
+    (tmp_path / ".claude" / "skills" / "npm" / "SKILL.md").write_text("# NPM skill\n\n## Too short\n\nhi\n")
+    (tmp_path / ".dates.tsv").write_text("docs/npm.md\t2026-11-20\n")
+    mylab._cache.update(at=0.0, root="")
+    secs = mylab.sections(str(tmp_path))
+    assert [x["heading"] for x in secs] == ["Failover when NPM is down", "Package list"]
+    fail, pkgs = secs
+    assert fail["score"] > pkgs["score"] and fail["anchor"] == "failover-when-npm-is-down"
+    prompts = []
+
+    async def ask(client, s, prompt, system=""):
+        prompts.append((prompt, system))
+        return json.dumps({"cards": [
+            {"title": "Your NPM has a second door, not a spare", "body": "CT 113's gatekeeper answers on the LAN when VM 152 is down."},
+            {"title": "Leaky", "body": "The token: api_key: abcdefghijklmnop1234"}]})
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    monkeypatch.setattr(mylab, "pick", lambda secs, known, rng: next((x for x in secs if x["heading"].startswith("Failover")
+                                                                   and not any(k.startswith("mylab:docs/npm.md#failover") for k in known)), None))
+    who = [AXL]
+    app = create_app(sso_settings(llm_url="http://llm.test", llm_key="k", bb_docs_dir=str(tmp_path)),
+                     transport=httpx.MockTransport(sso_backend(who)), store=Store(":memory:"), run_curator=False)
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        assert a.get("/api/sources").json()["sources"]["mylab"]["configured"]
+        card = a.get("/api/card/mylab").json()
+        assert card["title"] == "Your NPM has a second door, not a spare" and card["label"] == "Your lab · Reverse proxy"
+        assert card["url"] == "https://github.com/vfd000/bb/blob/main/docs/npm.md#failover-when-npm-is-down"
+        assert "abcdefghijklmnop1234" not in prompts[0][0] and "[redacted]" in prompts[0][0]  # secrets never sent
+        assert card["subtitle"] == "Failover when NPM is down · updated 2026-11-20" and "as of 2026-11" in prompts[0][0]
+        titles = {r.json()["title"] for r in (a.get("/api/card/mylab") for _ in range(6)) if r.status_code == 200}
+        assert titles <= {"Your NPM has a second door, not a spare"}  # the card that repeated a secret was dropped
+        # The Wikipedia-about-your-stack option steps aside while the lab's docs are there.
+        assert all(a.get("/api/card/homelab").json().get("label") != "Home lab · in your stack" for _ in range(8))
+    with TestClient(app, base_url="https://testserver") as d:
+        app.state.sso.allowed.add(DANI)
+        sign_in(d, who, DANI)
+        assert d.get("/api/card/mylab").status_code == 404 or d.get("/api/card/mylab").status_code == 503

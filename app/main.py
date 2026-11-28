@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 import dataclasses
 
-from . import auth, avoid, curator, exercise, flashcards, lessons, lyrics, profile, reader, recommend, sources
+from . import auth, avoid, curator, geoquiz, mylab, exercise, flashcards, lessons, lyrics, profile, reader, recommend, sources
 from .config import LESSON_LABELS
 from .config import KINDS, MAX_PER_LOAD, OWNER_ONLY_KINDS, RECALL_KINDS, Settings
 from .store import Store
@@ -30,6 +30,37 @@ from .store import Store
 log = logging.getLogger("liessure")
 STATIC = Path(__file__).parent / "static"
 PER_CARD_TIMEOUT = 8.0
+# Card fields written in English that get translated for readers of other languages ("quiz.hint" is a
+# key inside the card's quiz). Titles of movies, series and songs stay as they are.
+TRANSLATED = {
+    "math": ("title", "quiz.hint", "quiz.solution"),
+    "home": ("title", "blurb"),
+    "movie": ("blurb",),
+    "show": ("blurb",),
+}
+# Kinds skipped, rather than shown in English, when the translation isn't there in time.
+STRICT_TRANSLATED = frozenset({"math", "home"})
+TRANSLATE_WAIT = 6.0
+
+
+def _get(card: dict, path: str):
+    head, _, rest = path.partition(".")
+    v = card.get(head)
+    if not rest:
+        return v
+    return v.get(rest) if isinstance(v, dict) else None
+
+
+def _put(card: dict, path: str, value: str) -> None:
+    head, _, rest = path.partition(".")
+    if not rest:
+        card[head] = value
+    elif isinstance(card.get(head), dict):
+        card[head][rest] = value
+
+
+# How long a Nebula card waits, the first time, for its LLM-written description.
+BLURB_WAIT = 5.0
 
 
 class FreshStaticFiles(StaticFiles):
@@ -315,6 +346,17 @@ def create_app(
     def prefs_for(user: str) -> dict:
         return settings.user_prefs.get(settings.owner_sub if user == auth.OWNER else user, {}) or {}
 
+    def weights_for(user: str) -> dict[str, int]:
+        """The configured mix, with this person's own weights over it (prefs "weights")."""
+        own = prefs_for(user).get("weights") or {}
+        out = dict(settings.weights)
+        for k, v in own.items():
+            try:
+                out[k] = max(0, int(v))
+            except (TypeError, ValueError):
+                pass
+        return out
+
     def settings_for(user: str) -> Settings:
         """The settings a person's cards are made with: their reading language, news, interests and lessons."""
         p = prefs_for(user)
@@ -390,7 +432,69 @@ def create_app(
                 return card
         return None
 
+    blurb_tasks: dict[str, asyncio.Task] = {}
+
+    async def with_video_blurb(client: httpx.AsyncClient, card: dict | None, user: str) -> dict | None:
+        """Nebula's own descriptions are mostly plugs and credits: an LLM-written line in the reader's
+        language instead, kept once made. The first showing waits a few seconds for it; past that the
+        cleaned description stands and the line is ready the next time."""
+        if not card or not str(card.get("ref") or "").startswith("nebula:") or not settings.curator_enabled:
+            return card
+        lang = prefs_for(user).get("lang_name") or "English"
+        key = curator.video_blurb_key(card["ref"], lang)
+        hit = store.get_meta(key)
+        if hit is None:
+            task = blurb_tasks.get(key)
+            if task is None:
+                task = asyncio.create_task(curator.describe_video(client, settings, store, card, lang))
+                blurb_tasks[key] = task
+                task.add_done_callback(lambda _t, k=key: blurb_tasks.pop(k, None))
+            try:
+                hit = await asyncio.wait_for(asyncio.shield(task), BLURB_WAIT)
+            except (asyncio.TimeoutError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+                log.info("video blurb %s: %s", card["ref"], type(e).__name__)
+                return card
+        return {**card, "blurb": hit} if hit else card
+
+    async def in_their_language(client: httpx.AsyncClient, card: dict | None, user: str) -> dict | None:
+        """Cards written in English by this server or its services (math, the solar numbers, Jellyfin's
+        synopses), translated for a reader who reads another language; kept once translated. Math and
+        home cards that can't be translated in time are skipped rather than shown in English; a synopsis
+        stays as it is."""
+        p = prefs_for(user)
+        fields = TRANSLATED.get((card or {}).get("kind", ""))
+        if not card or not fields or not p.get("lang_name") or p.get("lang", "en") == "en" or not settings.curator_enabled:
+            return card
+        texts = {f: v for f in fields if isinstance(v := _get(card, f), str) and v.strip()}
+        if not texts:
+            return card
+        key = curator.translation_key(texts, p["lang_name"])
+        done = curator.cached_translation(store, key)
+        if done is None:
+            task = blurb_tasks.get(key)
+            if task is None:
+                task = asyncio.create_task(curator.translate_fields(client, settings, store, texts, p["lang_name"]))
+                blurb_tasks[key] = task
+                task.add_done_callback(lambda _t, k=key: blurb_tasks.pop(k, None))
+            try:
+                done = await asyncio.wait_for(asyncio.shield(task), TRANSLATE_WAIT)
+            except (asyncio.TimeoutError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+                log.info("translate %s: %s", card.get("kind"), type(e).__name__)
+                done = None
+        if not done:
+            return None if card["kind"] in STRICT_TRANSLATED else card
+        out = {**card, "quiz": dict(card["quiz"]) if isinstance(card.get("quiz"), dict) else card.get("quiz")}
+        for f, v in done.items():
+            _put(out, f, v)
+        return out
+
     async def _one(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
+        card = await _one_raw(client, kind, rng, user)
+        if kind == "video":
+            card = await with_video_blurb(client, card, user)
+        return await in_their_language(client, card, user)
+
+    async def _one_raw(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
         if kind not in kinds_for(user):
             return None
         if kind == "recall":
@@ -411,6 +515,8 @@ def create_app(
             return await own_bite(client, user, rng)
         if kind == "todo":
             return await todo_card(client, rng)
+        if kind == "mylab":
+            return await own_lab(client, rng)
         if kind == "exercise":
             return await exercise_card(client, rng, user)
         if kind == "recommend":
@@ -445,12 +551,31 @@ def create_app(
         pick = store.take(pool, rng.random())
         if not pick and settings.curator_enabled:
             s = settings_for(user)
+            if prefs_for(user).get("geo_bites") and rng.random() < 0.6:
+                # A country, in their language: its Wikipedia article is the source of the next few bites.
+                try:
+                    lang = "es" if s.reply_lang == "Spanish" else "en"
+                    country = rng.choice(await geoquiz.countries(client, settings.data_dir))["name"][lang]
+                    s = dataclasses.replace(s, wiki_interests=[country])
+                except sources.Unavailable as e:
+                    log.info("geo bites: %s", e)
             try:
                 await curator.generate_bites(client, s, store, rng, topics=1, pool=pool,
                                              write_in=prefs_for(user).get("lang_name", ""))
             except httpx.HTTPError as e:
                 log.warning("bites for %s: %s", user, e)
             pick = store.take(pool, rng.random())
+        return pick["card"] if pick else None
+
+    async def own_lab(client: httpx.AsyncClient, rng: random.Random) -> dict | None:
+        """How the owner's lab works, from its own docs: from the pool, topped up a section at a time."""
+        pick = store.take(mylab.POOL, rng.random())
+        if not pick and settings.curator_enabled:
+            try:
+                await mylab.generate(client, settings, store, rng, curator.ask_llm)
+            except httpx.HTTPError as e:
+                log.warning("your lab: %s", e)
+            pick = store.take(mylab.POOL, rng.random())
         return pick["card"] if pick else None
 
     async def own_career(client: httpx.AsyncClient, user: str, rng: random.Random) -> dict | None:
@@ -580,7 +705,7 @@ def create_app(
         """Per kind over the last `days`: cards seen, engaged with, scrolled past, and the weight it now gets."""
         user = request.state.user
         stats = store.engagement(user, days)
-        weights = engagement_weights(settings.weights, store.engagement(user))
+        weights = engagement_weights(weights_for(user), store.engagement(user))
         return {"kinds": {k: {**v, "weight": round(weights.get(k, 0), 2), "base": settings.weights.get(k, 0)}
                           for k, v in sorted(stats.items())}}
 
@@ -720,7 +845,7 @@ def create_app(
         if kinds:
             wanted = {k.strip() for k in kinds.split(",")}
             avail = {k: v and k in wanted for k, v in avail.items()}
-        weights = engagement_weights(settings.weights, store.engagement(user))
+        weights = engagement_weights(weights_for(user), store.engagement(user))
         plan = pick_kinds(weights, avail, n, rng)
         client = request.app.state.client
         cards = await asyncio.gather(*(one(client, k, rng, user) for k in plan))

@@ -485,12 +485,13 @@ def _immich_card(s: Settings, asset: dict[str, Any], subtitle: str) -> Card:
     exif = asset.get("exifInfo") or {}
     place = ", ".join(x for x in (exif.get("city"), exif.get("state"), exif.get("country")) if x)
     when = (asset.get("localDateTime") or asset.get("fileCreatedAt") or "")[:10]
-    parts = [p for p in (subtitle, when, place) if p]
+    # The date has its own line on the card (from photo.when); the subtitle keeps what else there is.
+    parts = [p for p in (subtitle, place if subtitle else "") if p]
     return Card(
         kind="photo",
         label="Photo in Immich",
         title=place or when or "A photo",
-        subtitle=" · ".join(parts[1:] if not subtitle else parts),
+        subtitle=" · ".join(parts),
         blurb=_clip(exif.get("description")),
         image=proxied(f"{s.immich.url}/api/assets/{asset['id']}/thumbnail?size=preview"),
         url=f"{s.immich.link_base}/photos/{asset['id']}",
@@ -660,13 +661,50 @@ def video_urls(s: Settings, vid: str) -> tuple[str, dict[str, str]]:
     return yt, {"label": "Invidious", "url": inv}
 
 
+# Lines in a creator's description that say nothing about the video: links, handles, emails,
+# sponsor and merch plugs, and the credits roll ("Editing by ...").
+_DESC_URL = re.compile(r"https?://|www\.|\b[\w.+-]+@[\w-]+\.[\w.]+\b", re.I)
+_DESC_PLUG = re.compile(
+    r"^\W*(instagram|twitter|x|tiktok|facebook|threads|bluesky|mastodon|reddit|discord|patreon|merch\w*|"
+    r"shop|store|newsletter|podcast|support|subscribe|follow|sponsor\w*|other emails?|business|contact|"
+    r"music|footage|sources?|links?)\b[^:]{0,40}:", re.I)
+# A list of other videos: nothing after it is about this one.
+_DESC_OTHERS = re.compile(r"^\W*(related|relevant|more|other|previous|similar|recommended) (videos?|episodes?)\b", re.I)
+_DESC_HEADING = re.compile(r"^\W*(chapters|timestamps|credits|sources|links)\W*$", re.I)
+_DESC_CREDIT = re.compile(r"^\W*[\w ,&/]{0,40}\bby\b\s+[A-Z]", re.U)
+
+
+_DESC_LINK = re.compile(r"<a\b[^>]*>.*?</a\s*>", re.I | re.S)
+_DESC_BREAK = re.compile(r"</p\s*>|<br\s*/?>|</li\s*>|</h\d\s*>|</div\s*>", re.I)
+
+
+def clean_video_description(text: str | None) -> str:
+    """What's left of a video description once the plugs, links and credits are taken out. Takes the
+    feed's HTML (links are dropped whole, text and all: a list of related videos is a list of links) or
+    plain text."""
+    text = text or ""
+    if "<" in text:
+        text = _DESC_BREAK.sub("\n", _DESC_LINK.sub(" ", text))
+        text = html.unescape(_TAG.sub(" ", text))
+    keep = []
+    for line in re.split(r"\n+|\s{3,}", text):
+        line = " ".join(line.split())
+        if _DESC_OTHERS.match(line):
+            break
+        if (not line or not re.search(r"\w", line) or line.endswith(":") or _DESC_URL.search(line)
+                or _DESC_PLUG.match(line) or _DESC_HEADING.match(line) or _DESC_CREDIT.match(line)):
+            continue
+        keep.append(line)
+    return " ".join(keep)
+
+
 def nebula_card(item: dict[str, Any]) -> Card:
     return Card(
         kind="video",
         label="Nebula",
         title=item["title"],
         subtitle=item.get("author") or item.get("source") or "",
-        blurb=_clip(item.get("summary"), 240),
+        blurb=_clip(clean_video_description(item.get("summary_html") or item.get("summary")), 240),
         image=item.get("image") or "",
         url=item["url"],
         ref="nebula:" + hashlib.sha1(item["url"].encode()).hexdigest()[:16],
@@ -793,6 +831,7 @@ def parse_feed(body: bytes) -> list[dict[str, Any]]:
         out.append({
             "title": _text(it.find("title")), "url": _text(it.find("link")), "author": author,
             "summary": _text(it.find("description")), "source": source, "image": image,
+            "summary_html": it.findtext("description") or "",
             "ts": _when(_text(it.find("pubDate"))),
         })
     return [i for i in out if i["title"] and i["url"].startswith("http")]
@@ -889,6 +928,7 @@ async def language(client: httpx.AsyncClient, s: Settings, rng: random.Random) -
                 subtitle="Your spaced-repetition queue",
                 blurb="Clear whatever is due. It's shorter than a front page.",
                 url=s.language_practice_url,
+                ref=f"drill:{code or lang}",  # one per language: they share the practice URL
             )
         options += [drill, drill]  # the drill is the best use of the minute; weight it
 
@@ -941,11 +981,18 @@ async def _wiki_summary(client: httpx.AsyncClient, lang: str, title: str) -> dic
     return r.json()
 
 
+def _mylab_available(s: Settings) -> bool:
+    from . import mylab  # late import
+    return mylab.available(s)
+
+
 async def homelab(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
     """Home-lab design (builds, tours, write-ups) and the tech that runs in yours."""
     options: list[tuple[Callable[[], Awaitable[Card]], int]] = []
 
-    if s.homelab_stack:
+    # With the lab's own docs on hand, "Your lab" cards (mylab.py) say how it works; a Wikipedia page about
+    # a tool in the stack is the basic version of that, so it steps aside.
+    if s.homelab_stack and not _mylab_available(s):
         async def stack() -> Card:
             data = await _wiki_summary(client, s.wikipedia_lang, rng.choice(s.homelab_stack))
             if data.get("type") == "disambiguation":
@@ -1113,6 +1160,11 @@ async def session(client: httpx.AsyncClient, s: Settings, rng: random.Random) ->
 async def trivia_card(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
     from . import jeopardy  # late import: jeopardy imports this module
     return await jeopardy.card(client, s.data_dir, rng)
+
+
+async def geoquiz_card(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    from . import geoquiz  # late import: geoquiz imports this module
+    return await geoquiz.card(client, "es" if s.reply_lang == "Spanish" else "en", rng, s.data_dir)
 
 
 async def kquiz_card(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
@@ -1856,11 +1908,13 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "lesson": bite,  # also served by main.py from a per-person pool
     "career": bite,  # likewise
     "kquiz": kquiz_card,
+    "geoquiz": geoquiz_card,
     "trivia": trivia_card,
     "session": session,
     "exercise": bite,
     "recommend": bite,  # served by main.py (skips what this person has already seen)  # served by main.py (the Done log and Not now are per person)
     "flashcard": bite,  # served by main.py from the person's decks
+    "mylab": bite,  # served by main.py from its pool (mylab.py)
 }
 
 
@@ -1890,6 +1944,8 @@ def configured(s: Settings) -> dict[str, bool]:
         "kquiz": True,  # only for readers learning Korean (main.kinds_for)
         "session": bool(s.sessions_url and s.sessions_token),
         "trivia": True,
+        "geoquiz": True,  # countries from Wikidata, fetched in the background (geoquiz.py)
+        "mylab": bool(s.llm_url and s.llm_key and _mylab_available(s)),  # owner only (mylab.py)
         "exercise": True,
         "recommend": bool(s.jellyseerr_url and s.jellyseerr_api_key and s.jellyfin.url and s.jellyfin_token),  # owner only; the Exercises list and the activity tracker are optional  # Jeopardy! clues, downloaded to the data volume on first use (jeopardy.py)
         "flashcard": True,  # only for people with flashcards due (main.kinds_for)

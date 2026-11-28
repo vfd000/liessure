@@ -70,6 +70,7 @@ body {
 .label { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); font-weight: 700; }
 .title { margin: 4px 0 2px; font-size: 19px; line-height: 1.25; }
 .subtitle { color: var(--muted); font-size: 14px; }
+.photo-date { margin: 2px 0 4px; font-size: 16px; font-weight: 600; color: var(--ink); }
 .why {
   margin: 8px 0 0; padding-left: 10px; border-left: 3px solid var(--accent);
   font-size: 14px; color: var(--ink); font-style: italic;

@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh the read-only bb docs checkout Liessure's "Your lab" cards read
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/liessure-bbdocs-refresh
+TimeoutStartSec=5min

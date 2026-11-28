@@ -51,7 +51,23 @@ feed, so a fresh deploy shows Wikipedia and language cards only.
 | `exercise` | Owner only. A short bodyweight set that fits the hour: breathing and wind-down only after 21:30 (sleep first), mobility in the morning, the harder shoulder/knee/core sets and cardio in the day. Exercises on the household Exercises list (`EXERCISE_LIST_ID`, 15; text = name, notes = dose and cues) come first. **Done** keeps it (not offered again today, today's tally); **Not now** holds exercise cards for 2 hours. No cardio after a run logged today in the activity tracker (`ACTIVITY_URL` + `ACTIVITY_TOKEN`, its MCP_API_TOKEN, read only; optional) | — |
 | (engagement) | The page reports how long each card was on screen (`POST /api/views`, batched: kind, ref, title, seconds); Done/Later swipes are recorded too. A card is *engaged* if opened/played/read, put on Later, or looked at 8 s+; *skipped* if on screen under 2 s with nothing else. Feed weights per person drift with it (0.5x–1.8x of the configured weight once a kind has 6+ cards to judge), and the curator gets "lingered on" and "scrolled straight past" titles beside "recently opened". `GET /api/engagement` shows the numbers | — |
 | `recommend` | Owner only. Movies and series like ones in the library: a few random Jellyfin movies/series (by TMDB id) seed Jellyseerr's "recommended" lists; titles already available or requested are dropped. **Get it** files a Jellyseerr request (all seasons for a series), which Radarr/Sonarr fetch. Needs `JELLYSEERR_URL` + `JELLYSEERR_API_KEY` (`JELLYSEERR_LINK` for the Details link, default requests.liess.tv). Books (Bookshelf) next | — |
+| `geoquiz` | Geography quiz: capitals, flags, continents, which is bigger or has more people. Answers are Wikidata's (197 sovereign states, names in the reader's language), never a model's; no neighbour questions (Wikidata counts sea borders). The list is kept on the data volume (`geo-countries.json`) and refreshed weekly; after a failed fetch Wikidata isn't asked again for 15 minutes | — |
+| `mylab` | Owner only. **Your lab:** 2-3 cards at a time about how *your* lab works, written by the LLM from one section of the bb repo's own docs and Claude skills: failover and fallback paths, backup and restore, onboarding checklists, design decisions and why, root causes and gotchas (sections that explain score higher than sections that list; recently updated docs a bit higher still). Each card names the doc, says when it was last updated and links to the heading on GitHub. Secrets in the text are redacted before it goes to the model, and a card that repeats one is dropped. While the docs are there, the Wikipedia-about-your-stack `homelab` cards step aside | `BB_DOCS_DIR` (`/data/bbdocs`, kept by `deploy/bbdocs/`), `BB_DOCS_URL` |
 | `trivia` | A Jeopardy! clue from jwolle1/jeopardy_clue_dataset (~554k clues, 1984 on), downloaded to the data volume on first use and not kept in this repo. Type your response: "What is", articles, punctuation and small typos are forgiven | — |
+
+**Reading language.** For someone whose prefs read another language (`lang`, `lang_name`), cards this
+server or its services write in English are translated by the LLM and kept by content: math (the problem,
+hint and worked solution; never the answer the page checks), the solar/weather card and Jellyfin
+synopses. Math and home cards are skipped rather than shown in English when a translation isn't there in
+6 s. Titles of movies, series and songs stay as they are. The page translates the labels and buttons the
+server writes. Per-person prefs can also set `weights` (over `LIESSURE_WEIGHTS`) and `geo_bites` (a random
+country's Wikipedia article feeds the next bite-size cards).
+
+**Your lab docs** (`deploy/bbdocs/`): `install.sh`, run once by axl from the laptop, generates a deploy key
+on CT 163 (the private half never leaves it), adds it to vfd000/bb **read-only**, and installs an hourly
+timer that keeps a sparse, blobless checkout of `docs/` and `.claude/skills/` at
+`/var/lib/docker/volumes/liessure_liessure-data/_data/bbdocs` (the container's `/data/bbdocs`), with each
+file's last-commit date in `.dates.tsv`. GitHub's host key is pinned.
 
 **Recall.** When you open or play a Wikipedia, news, home-lab, language or
 video card, its text is kept. Each curator pass turns cards opened six or

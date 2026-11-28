@@ -53,21 +53,24 @@ DEFAULT_WEIGHTS = {
     "exercise": 2,
     "recommend": 2,
     "flashcard": 3,
+    "geoquiz": 1,
+    "mylab": 3,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "session": 2, "exercise": 1, "recommend": 1, "flashcard": 2}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "session": 2, "exercise": 1, "recommend": 1, "flashcard": 2, "geoquiz": 2, "mylab": 2}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
-RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite"})
+RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite", "mylab"})
 
 # Per-person preferences, keyed by Zitadel sub: what someone reads in, their interests, what they're
 # learning, careers they're exploring. They're personal, so they never live in this (public) repo: they
 # come from USER_PREFS_FILE (default /data/user-prefs.json, on the server's data volume) and USER_PREFS
 # (JSON, overrides the file). Shape of one entry:
 #   {"lang": "es", "lang_name": "Spanish", "wikipedia": "es", "news_feeds": [...], "interests": [...],
-#    "video_topics": [...], "nebula_feeds": [...], "nebula_share": 0.5, "learning": [{"name": "English", "label": "Inglés", "code": "en",
+#    "video_topics": [...], "nebula_feeds": [...], "nebula_share": 0.5, "weights": {"math": 1, ...},
+#    "geo_bites": true, "learning": [{"name": "English", "label": "Inglés", "code": "en",
 #    "style": "reading" | "beginner"}], "kinds_off": [...],
 #    "career": {"now": "...", "likes": [...], "explore": [...]}, "labels": {...}}
 # Interests and languages move to the household graph with per-user curation.
@@ -102,10 +105,10 @@ def parse_user_prefs(raw: str, path: str = "") -> dict[str, dict]:
 
 
 # Kinds only the owner sees: they read the owner's own services (jobs, lists, the lab).
-OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry", "session", "exercise", "recommend"})
+OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry", "session", "exercise", "recommend", "mylab"})
 
 # Kinds whose titles never go to the LLM as evidence of what you like.
-UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia", "session", "exercise"})
+UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia", "session", "exercise", "geoquiz", "mylab"})
 
 KINDS = tuple(DEFAULT_WEIGHTS)
 
@@ -297,6 +300,9 @@ class Settings:
     language_practice_url: str = ""
 
     homelab_stack: list[str] = field(default_factory=lambda: parse_list(DEFAULT_HOMELAB_STACK))
+    # A read-only checkout of the bb repo's docs and skills (deploy/bbdocs/), for "Your lab" cards.
+    bb_docs_dir: str = ""
+    bb_docs_url: str = "https://github.com/vfd000/bb/blob/main"
     homelab_feeds: list[str] = field(default_factory=list)
     homelab_topics: list[str] = field(default_factory=list)
     homelab_max_age_days: float = 30
@@ -424,6 +430,8 @@ class Settings:
             languages_fluent=parse_langs(_env("LANGUAGES_FLUENT", DEFAULT_FLUENT)),
             language_practice_url=_strip(_env("LANGUAGE_PRACTICE_URL")),
             homelab_stack=parse_list(_env("HOMELAB_STACK", DEFAULT_HOMELAB_STACK)),
+            bb_docs_dir=_env("BB_DOCS_DIR", "/data/bbdocs"),
+            bb_docs_url=_env("BB_DOCS_URL", "https://github.com/vfd000/bb/blob/main"),
             homelab_feeds=parse_list(_env("HOMELAB_FEEDS", DEFAULT_HOMELAB_FEEDS)),
             homelab_topics=parse_list(_env("HOMELAB_TOPICS", DEFAULT_HOMELAB_TOPICS)),
             homelab_max_age_days=float(_env("HOMELAB_MAX_AGE_DAYS", "30")),
