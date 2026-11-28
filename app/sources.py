@@ -1153,6 +1153,11 @@ async def trivia_card(client: httpx.AsyncClient, s: Settings, rng: random.Random
     return await jeopardy.card(client, s.data_dir, rng)
 
 
+async def geoquiz_card(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
+    from . import geoquiz  # late import: geoquiz imports this module
+    return await geoquiz.card(client, "es" if s.reply_lang == "Spanish" else "en", rng)
+
+
 async def kquiz_card(client: httpx.AsyncClient, s: Settings, rng: random.Random) -> Card:
     from . import kquiz  # late import: kquiz imports this module
     return await kquiz.card(client, "es" if s.reply_lang == "Spanish" else "en", s.wikipedia_lang, rng)
@@ -1894,6 +1899,7 @@ SOURCES: dict[str, Callable[[httpx.AsyncClient, Settings, random.Random], Awaita
     "lesson": bite,  # also served by main.py from a per-person pool
     "career": bite,  # likewise
     "kquiz": kquiz_card,
+    "geoquiz": geoquiz_card,
     "trivia": trivia_card,
     "session": session,
     "exercise": bite,
@@ -1928,6 +1934,7 @@ def configured(s: Settings) -> dict[str, bool]:
         "kquiz": True,  # only for readers learning Korean (main.kinds_for)
         "session": bool(s.sessions_url and s.sessions_token),
         "trivia": True,
+        "geoquiz": True,  # countries from Wikidata, fetched in the background (geoquiz.py)
         "exercise": True,
         "recommend": bool(s.jellyseerr_url and s.jellyseerr_api_key and s.jellyfin.url and s.jellyfin_token),  # owner only; the Exercises list and the activity tracker are optional  # Jeopardy! clues, downloaded to the data volume on first use (jeopardy.py)
         "flashcard": True,  # only for people with flashcards due (main.kinds_for)

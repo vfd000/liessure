@@ -36,6 +36,21 @@ NEBULA = """<?xml version="1.0"?><rss version="2.0"><channel><title>Nebula</titl
 <description>Buoyancy.</description><author>Real Engineering</author></item></channel></rss>"""
 
 
+def _geo_binding(n: int) -> dict:
+    """A made-up country for the geography quiz: names in both languages, on one of six continents."""
+    conts = [("África", "Africa"), ("Asia", "Asia"), ("Europa", "Europe"), ("América del Sur", "South America"),
+             ("América del Norte", "North America"), ("Oceanía", "Oceania")]
+    ces, cen = conts[n % 6]
+    v = lambda x: {"value": str(x)}
+    return {"c": v(f"http://www.wikidata.org/entity/Q{9000 + n}"), "nameEs": v(f"País {n}"), "nameEn": v(f"Country {n}"),
+            "capitalEs": v(f"Capital {n} (es)"), "capitalEn": v(f"Capital {n}"), "caps": v(2 if n == 7 else 1),
+            "continentEs": v(ces), "continentEn": v(cen), "conts": v(1), "population": v(1000 * 2 ** (n % 30) + n),
+            "areaM2": v(1e9 * 3 ** (n % 20) + n), "flagImg": v(f"http://commons.wikimedia.org/wiki/Special:FilePath/Flag{n}.svg")}
+
+
+GEO_JSON = json.dumps({"results": {"bindings": [_geo_binding(n) for n in range(120)]}})
+
+
 async def _agen(data):
     yield data
 
@@ -134,6 +149,8 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
     if host == "phrack.org" and path == "/issues/73/word-machines-for-weird-machines.html":
         return httpx.Response(200, text=PHRACK_TEXT)
     if host == "query.wikidata.org" and path == "/sparql":
+        if "Q3624078" in request.url.params.get("query", ""):
+            return httpx.Response(200, text=GEO_JSON)
         return httpx.Response(200, text=KQUIZ_JSON)
     if host == "phrack.org" and path == "/index_latest.html":
         return httpx.Response(200, text=PHRACK_HTML)
@@ -266,6 +283,8 @@ def full_settings(**kw) -> Settings:
 
 @pytest.fixture(autouse=True)
 def clear_caches():
+    from app import geoquiz
+    geoquiz._countries, geoquiz._fetched, geoquiz._task = [], 0.0, None
     for c in (sources._news_cache, sources._nebula_cache, sources._inv_cache, sources._romm_total,
               sources._homelab_cache, sources._jobs_cache, sources._gaps_cache,
               sources._telemetry_cache, sources._home_cache, sources._stats_cache, sources._todo_cache,
@@ -1474,6 +1493,9 @@ def test_a_spanish_reader_gets_spanish_help_and_no_wikipedia_walls(monkeypatch):
     seen = {}
 
     async def ask(client, s, prompt, system=None):
+        if prompt.startswith("Translate into Spanish:"):  # the math card itself, translated
+            texts = json.loads(prompt.split("\n", 1)[1])
+            return json.dumps({k: "ES " + v for k, v in texts.items()})
         seen["system"] = system
         return "1. Restaste en vez de sumar."
     monkeypatch.setattr(curator, "ask_llm", ask)

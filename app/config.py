@@ -53,11 +53,12 @@ DEFAULT_WEIGHTS = {
     "exercise": 2,
     "recommend": 2,
     "flashcard": 3,
+    "geoquiz": 1,
 }
 
 # Kinds shown at most this many times per feed load. The feed is a break,
 # not a work queue.
-MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "session": 2, "exercise": 1, "recommend": 1, "flashcard": 2}
+MAX_PER_LOAD = {"job": 1, "skill": 1, "telemetry": 1, "home": 1, "recall": 1, "todo": 1, "career": 1, "kquiz": 1, "trivia": 2, "session": 2, "exercise": 1, "recommend": 1, "flashcard": 2, "geoquiz": 2}
 
 # Cards whose text is kept when you open or play them, to quiz you on later.
 RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "infosec", "bite"})
@@ -67,7 +68,8 @@ RECALL_KINDS = frozenset({"wikipedia", "news", "homelab", "language", "video", "
 # come from USER_PREFS_FILE (default /data/user-prefs.json, on the server's data volume) and USER_PREFS
 # (JSON, overrides the file). Shape of one entry:
 #   {"lang": "es", "lang_name": "Spanish", "wikipedia": "es", "news_feeds": [...], "interests": [...],
-#    "video_topics": [...], "nebula_feeds": [...], "nebula_share": 0.5, "learning": [{"name": "English", "label": "Inglés", "code": "en",
+#    "video_topics": [...], "nebula_feeds": [...], "nebula_share": 0.5, "weights": {"math": 1, ...},
+#    "geo_bites": true, "learning": [{"name": "English", "label": "Inglés", "code": "en",
 #    "style": "reading" | "beginner"}], "kinds_off": [...],
 #    "career": {"now": "...", "likes": [...], "explore": [...]}, "labels": {...}}
 # Interests and languages move to the household graph with per-user curation.
@@ -105,7 +107,7 @@ def parse_user_prefs(raw: str, path: str = "") -> dict[str, dict]:
 OWNER_ONLY_KINDS = frozenset({"job", "skill", "todo", "telemetry", "session", "exercise", "recommend"})
 
 # Kinds whose titles never go to the LLM as evidence of what you like.
-UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia", "session", "exercise"})
+UNCURATED_KINDS = frozenset({"job", "skill", "telemetry", "home", "math", "recall", "todo", "trivia", "session", "exercise", "geoquiz"})
 
 KINDS = tuple(DEFAULT_WEIGHTS)
 
