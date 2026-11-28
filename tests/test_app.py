@@ -2104,3 +2104,84 @@ def test_a_reader_has_their_own_nebula_channels_and_share():
         sign_in(a, who, AXL)
         for _ in range(5):  # his share is 0: Invidious only, and Dani's cached feed isn't his
             assert a.get("/api/card/video").json()["label"] != "Nebula"
+
+
+WENDOVER_DESC = ('<p><p>Instagram: <a href="http://Instagram.com/sam.from.wendover">http://Instagram.com/sam.from.wendover</a></p>\n'
+                 '<p>Twitter: <a href="http://www.Twitter.com/WendoverPro">http://www.Twitter.com/WendoverPro</a></p>\n'
+                 '<p>Sponsorship Enquiries: wendover@standard.tv</p>\n<p>Other emails: sam@wendover.productions</p>\n'
+                 '<p>Writing by Sam Denby</p>\n<p>Editing by Alexander Williard</p>\n'
+                 '<p>Animation by Sara Stoltman, Gabriel Ferreras, and Kate Ermolenkko</p>\n<p>Thumbnail by Simon Buckmaster</p></p>')
+NEBULA_SPIRIT = ('<?xml version="1.0"?><rss version="2.0"><channel><title>Wendover</title>'
+                 '<item><title>Why Spirit Airlines Failed</title><link>https://nebula.tv/videos/wendover-why-spirit-airlines-failed/</link>'
+                 '<description><![CDATA[' + WENDOVER_DESC + ']]></description><author>Wendover</author></item></channel></rss>')
+
+
+def test_video_description_plugs_and_credits_are_dropped():
+    item = sources.parse_feed(NEBULA_SPIRIT.encode())[0]
+    assert sources.clean_video_description(item["summary"]) == ""
+    assert sources.nebula_card(item).blurb == ""
+    kept = sources.clean_video_description(
+        "Sam and Ben race across Japan.\nPatreon: patreon.com/jetlag\nThis season was filmed in March.")
+    assert kept == "Sam and Ben race across Japan. This season was filmed in March."
+
+
+def _spirit_app(monkeypatch, reply):
+    who = [AXL]
+    base = sso_backend(who)
+
+    def handler(request):
+        if request.url.host == "news.test" and request.url.path == "/spirit":
+            return httpx.Response(200, content=NEBULA_SPIRIT.encode())
+        return base(request)
+
+    prompts = []
+
+    async def ask(client, s, prompt, system=""):
+        prompts.append((prompt, system))
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    monkeypatch.setattr(curator, "ask_llm", ask)
+    s = sso_settings(llm_url="http://llm.test", llm_key="k", invidious=Service(), nebula_feeds=["http://news.test/spirit"],
+                     user_prefs={DANI: {"lang": "es", "lang_name": "Spanish"}})
+    app = create_app(s, transport=httpx.MockTransport(handler), store=Store(":memory:"), run_curator=False)
+    return app, who, prompts
+
+
+def test_nebula_cards_get_an_llm_description_in_the_readers_language(monkeypatch):
+    app, who, prompts = _spirit_app(monkeypatch, '{"description": "Wendover explica por qué fracasó Spirit Airlines."}')
+    with TestClient(app, base_url="https://testserver") as d:
+        sign_in(d, who, DANI)
+        v = d.get("/api/card/video").json()
+        assert v["blurb"] == "Wendover explica por qué fracasó Spirit Airlines."
+        assert "Instagram" not in v["blurb"]
+        prompt, system = prompts[0]
+        assert "Write the description in Spanish." in prompt and "Description: (none)" in prompt
+        assert "never add facts" in system
+        d.get("/api/card/video")
+        assert len(prompts) == 1  # kept, not asked again
+
+
+def test_nebula_card_keeps_the_cleaned_text_when_the_llm_fails(monkeypatch):
+    app, who, prompts = _spirit_app(monkeypatch, httpx.ConnectError("down"))
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        v = a.get("/api/card/video").json()
+        assert v["title"] == "Why Spirit Airlines Failed" and v["blurb"] == ""
+    app, who, prompts = _spirit_app(monkeypatch, '{"description": "See http://instagram.com/x"}')
+    with TestClient(app, base_url="https://testserver") as a:
+        sign_in(a, who, AXL)
+        assert a.get("/api/card/video").json()["blurb"] == ""  # a link from the model isn't kept either
+
+
+def test_related_video_links_and_list_headers_are_dropped():
+    html_desc = ('<p>Watch my public transit travel show "Day Pass" on Nebula: <a href="https://nebula.tv/daypass">Day Pass</a></p>'
+                 '<p>Punggol was planned as a town where you would not need a car.</p>'
+                 '<p>Related Videos</p><p><a href="https://nebula.tv/videos/x">Is Singapore a car paradise?</a></p>'
+                 '<p>Cycling Made Difficult</p>')
+    assert sources.clean_video_description(
+        "Nagasaki has the best trams.\nRelevant Videos\nThe International City of Streetcars\nCycling Made Difficult"
+    ) == "Nagasaki has the best trams."
+    assert sources.clean_video_description(html_desc) == (
+        "Punggol was planned as a town where you would not need a car.")

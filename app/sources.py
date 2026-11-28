@@ -660,13 +660,50 @@ def video_urls(s: Settings, vid: str) -> tuple[str, dict[str, str]]:
     return yt, {"label": "Invidious", "url": inv}
 
 
+# Lines in a creator's description that say nothing about the video: links, handles, emails,
+# sponsor and merch plugs, and the credits roll ("Editing by ...").
+_DESC_URL = re.compile(r"https?://|www\.|\b[\w.+-]+@[\w-]+\.[\w.]+\b", re.I)
+_DESC_PLUG = re.compile(
+    r"^\W*(instagram|twitter|x|tiktok|facebook|threads|bluesky|mastodon|reddit|discord|patreon|merch\w*|"
+    r"shop|store|newsletter|podcast|support|subscribe|follow|sponsor\w*|other emails?|business|contact|"
+    r"music|footage|sources?|links?)\b[^:]{0,40}:", re.I)
+# A list of other videos: nothing after it is about this one.
+_DESC_OTHERS = re.compile(r"^\W*(related|relevant|more|other|previous|similar|recommended) (videos?|episodes?)\b", re.I)
+_DESC_HEADING = re.compile(r"^\W*(chapters|timestamps|credits|sources|links)\W*$", re.I)
+_DESC_CREDIT = re.compile(r"^\W*[\w ,&/]{0,40}\bby\b\s+[A-Z]", re.U)
+
+
+_DESC_LINK = re.compile(r"<a\b[^>]*>.*?</a\s*>", re.I | re.S)
+_DESC_BREAK = re.compile(r"</p\s*>|<br\s*/?>|</li\s*>|</h\d\s*>|</div\s*>", re.I)
+
+
+def clean_video_description(text: str | None) -> str:
+    """What's left of a video description once the plugs, links and credits are taken out. Takes the
+    feed's HTML (links are dropped whole, text and all: a list of related videos is a list of links) or
+    plain text."""
+    text = text or ""
+    if "<" in text:
+        text = _DESC_BREAK.sub("\n", _DESC_LINK.sub(" ", text))
+        text = html.unescape(_TAG.sub(" ", text))
+    keep = []
+    for line in re.split(r"\n+|\s{3,}", text):
+        line = " ".join(line.split())
+        if _DESC_OTHERS.match(line):
+            break
+        if (not line or not re.search(r"\w", line) or line.endswith(":") or _DESC_URL.search(line)
+                or _DESC_PLUG.match(line) or _DESC_HEADING.match(line) or _DESC_CREDIT.match(line)):
+            continue
+        keep.append(line)
+    return " ".join(keep)
+
+
 def nebula_card(item: dict[str, Any]) -> Card:
     return Card(
         kind="video",
         label="Nebula",
         title=item["title"],
         subtitle=item.get("author") or item.get("source") or "",
-        blurb=_clip(item.get("summary"), 240),
+        blurb=_clip(clean_video_description(item.get("summary_html") or item.get("summary")), 240),
         image=item.get("image") or "",
         url=item["url"],
         ref="nebula:" + hashlib.sha1(item["url"].encode()).hexdigest()[:16],
@@ -793,6 +830,7 @@ def parse_feed(body: bytes) -> list[dict[str, Any]]:
         out.append({
             "title": _text(it.find("title")), "url": _text(it.find("link")), "author": author,
             "summary": _text(it.find("description")), "source": source, "image": image,
+            "summary_html": it.findtext("description") or "",
             "ts": _when(_text(it.find("pubDate"))),
         })
     return [i for i in out if i["title"] and i["url"].startswith("http")]

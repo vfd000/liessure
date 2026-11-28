@@ -30,6 +30,8 @@ from .store import Store
 log = logging.getLogger("liessure")
 STATIC = Path(__file__).parent / "static"
 PER_CARD_TIMEOUT = 8.0
+# How long a Nebula card waits, the first time, for its LLM-written description.
+BLURB_WAIT = 5.0
 
 
 class FreshStaticFiles(StaticFiles):
@@ -390,7 +392,35 @@ def create_app(
                 return card
         return None
 
+    blurb_tasks: dict[str, asyncio.Task] = {}
+
+    async def with_video_blurb(client: httpx.AsyncClient, card: dict | None, user: str) -> dict | None:
+        """Nebula's own descriptions are mostly plugs and credits: an LLM-written line in the reader's
+        language instead, kept once made. The first showing waits a few seconds for it; past that the
+        cleaned description stands and the line is ready the next time."""
+        if not card or not str(card.get("ref") or "").startswith("nebula:") or not settings.curator_enabled:
+            return card
+        lang = prefs_for(user).get("lang_name") or "English"
+        key = curator.video_blurb_key(card["ref"], lang)
+        hit = store.get_meta(key)
+        if hit is None:
+            task = blurb_tasks.get(key)
+            if task is None:
+                task = asyncio.create_task(curator.describe_video(client, settings, store, card, lang))
+                blurb_tasks[key] = task
+                task.add_done_callback(lambda _t, k=key: blurb_tasks.pop(k, None))
+            try:
+                hit = await asyncio.wait_for(asyncio.shield(task), BLURB_WAIT)
+            except (asyncio.TimeoutError, httpx.HTTPError, KeyError, ValueError, TypeError) as e:
+                log.info("video blurb %s: %s", card["ref"], type(e).__name__)
+                return card
+        return {**card, "blurb": hit} if hit else card
+
     async def _one(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
+        card = await _one_raw(client, kind, rng, user)
+        return await with_video_blurb(client, card, user) if kind == "video" else card
+
+    async def _one_raw(client: httpx.AsyncClient, kind: str, rng: random.Random, user: str = auth.OWNER) -> dict | None:
         if kind not in kinds_for(user):
             return None
         if kind == "recall":
